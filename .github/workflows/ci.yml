@@ -6,6 +6,16 @@ on:
     branches: [main]
 
 jobs:
+  notify-start:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    uses: shulzpavel/planning-poker-dev/.github/workflows/ci-notify-start.yml@main
+    with:
+      service_label: voting-service
+    secrets:
+      DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+      DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+      DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+
   test:
     runs-on: ubuntu-latest
     steps:
@@ -43,3 +53,18 @@ jobs:
             cd /opt/planning-poker-dev
             export DEPLOY_TRIGGER="github:${{ github.repository }}@${{ github.sha }}"
             ./infra/deploy/deploy-service-prod.sh voting-service
+
+  notify-result:
+    if: always() && !cancelled()
+    needs: [test, docker, deploy]
+    uses: shulzpavel/planning-poker-dev/.github/workflows/ci-notify-result.yml@main
+    with:
+      service_label: voting-service
+      test_result: ${{ needs.test.result }}
+      docker_result: ${{ needs.docker.result }}
+      deploy_result: ${{ needs.deploy.result }}
+      notify_on_success: true
+    secrets:
+      DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+      DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+      DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
