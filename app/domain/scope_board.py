@@ -13,6 +13,7 @@ from app.utils.jira_role_contributors import person_bucket_key
 IntakeStatus = Literal["ok", "warning", "stop"]
 ScopeSectionKind = Literal["planned", "unplanned"]
 WorkloadMode = Literal["sp", "sp_dev_test"]
+RoleWorkloadHorizon = Literal["active", "sprint"]
 
 DEFAULT_WORKLOAD_MODE: WorkloadMode = "sp"
 WORKLOAD_MODES = frozenset({"sp", "sp_dev_test"})
@@ -286,11 +287,19 @@ def _issue_in_test_phase(issue: dict[str, Any]) -> bool:
 
 
 def _issue_in_qa_workload_scope(issue: dict[str, Any]) -> bool:
-    """QA workload includes testing, release-ready, and done tasks."""
+    """QA sprint workload: tasks that reached testing or were completed."""
     status, category = _status_tokens(issue)
     if status in _QA_WORKLOAD_STATUS_NAMES:
         return True
     return category == "done" or status in _DONE_STATUS_NAMES
+
+
+def _issue_in_qa_active_workload_scope(issue: dict[str, Any]) -> bool:
+    """QA active workload: tasks currently in testing or release-ready."""
+    status, category = _status_tokens(issue)
+    if category == "done" or status in _DONE_STATUS_NAMES:
+        return False
+    return status in _QA_WORKLOAD_STATUS_NAMES
 
 
 def _developer_task_summary(issue: dict[str, Any]) -> dict[str, Any]:
@@ -340,39 +349,58 @@ def _positive_story_points_test(issue: dict[str, Any]) -> float:
     return 0.0
 
 
-def _qa_workload_assignee_name(issue: dict[str, Any]) -> str:
+def _qa_workload_assignee_name(issue: dict[str, Any], *, horizon: RoleWorkloadHorizon = "active") -> str:
     """QA workload: SP Test must be filled; person from Тестировщик or assignee."""
-    if not _issue_in_qa_workload_scope(issue):
+    if not _issue_in_role_workload_scope(issue, "qa", horizon=horizon):
         return ""
     if _positive_story_points_test(issue) <= 0:
         return ""
     return _jira_role_assignee_name(issue, "qa") or str(issue.get("assignee") or "").strip()
 
 
-def _role_workload_assignee_name(issue: dict[str, Any], role: str) -> str:
+def _role_workload_assignee_name(
+    issue: dict[str, Any],
+    role: str,
+    *,
+    horizon: RoleWorkloadHorizon = "active",
+) -> str:
     if role == "qa":
-        return _qa_workload_assignee_name(issue)
+        return _qa_workload_assignee_name(issue, horizon=horizon)
     return _jira_role_assignee_name(issue, role)
 
 
-def _issue_has_role_workload_attribution(issue: dict[str, Any], role: str) -> bool:
+def _issue_has_role_workload_attribution(
+    issue: dict[str, Any],
+    role: str,
+    *,
+    horizon: RoleWorkloadHorizon = "active",
+) -> bool:
     if role == "qa":
-        if not _issue_in_qa_workload_scope(issue):
+        if not _issue_in_role_workload_scope(issue, "qa", horizon=horizon):
             return False
         test_sp = _track_sp_value(issue, "test")
         if test_sp is None:
             return False
         if test_sp == 0:
             return True
-        return bool(_qa_workload_assignee_name(issue))
+        return bool(_qa_workload_assignee_name(issue, horizon=horizon))
     return bool(_jira_role_assignee_name(issue, role))
 
 
-def _issue_in_role_workload_scope(issue: dict[str, Any], role: str) -> bool:
+def _issue_in_role_workload_scope(
+    issue: dict[str, Any],
+    role: str,
+    *,
+    horizon: RoleWorkloadHorizon = "active",
+) -> bool:
     bucket = classify_scope_report_bucket(issue)
     if role in {"front", "back"}:
-        return bucket in {"in_work", "in_test"}
+        if horizon == "active":
+            return bucket in {"in_work", "in_test"}
+        return bucket != "not_started"
     if role == "qa":
+        if horizon == "active":
+            return _issue_in_qa_active_workload_scope(issue)
         return _issue_in_qa_workload_scope(issue)
     return False
 
@@ -391,8 +419,13 @@ def _prefer_display_name(current: str, candidate: str) -> str:
     return candidate if len(candidate) > len(current) else current
 
 
-def _issue_requires_jira_role(issue: dict[str, Any], role: str) -> bool:
-    if not _issue_in_role_workload_scope(issue, role):
+def _issue_requires_jira_role(
+    issue: dict[str, Any],
+    role: str,
+    *,
+    horizon: RoleWorkloadHorizon = "active",
+) -> bool:
+    if not _issue_in_role_workload_scope(issue, role, horizon=horizon):
         return False
     if role == "qa":
         return True
@@ -404,11 +437,16 @@ def _issue_requires_jira_role(issue: dict[str, Any], role: str) -> bool:
     return role in required_engineering_roles(labels)
 
 
-def _issue_unresolved_reason(issue: dict[str, Any], role: str) -> str:
-    if not _issue_requires_jira_role(issue, role):
+def _issue_unresolved_reason(
+    issue: dict[str, Any],
+    role: str,
+    *,
+    horizon: RoleWorkloadHorizon = "active",
+) -> str:
+    if not _issue_requires_jira_role(issue, role, horizon=horizon):
         return ""
     if role == "qa":
-        if _issue_has_role_workload_attribution(issue, role):
+        if _issue_has_role_workload_attribution(issue, role, horizon=horizon):
             return ""
         test_sp = _track_sp_value(issue, "test")
         if test_sp is None:
@@ -421,10 +459,15 @@ def _issue_unresolved_reason(issue: dict[str, Any], role: str) -> str:
     return "jira_field_empty"
 
 
-def _role_attribution_tier(issue: dict[str, Any], role: str) -> str:
-    if not _issue_requires_jira_role(issue, role):
+def _role_attribution_tier(
+    issue: dict[str, Any],
+    role: str,
+    *,
+    horizon: RoleWorkloadHorizon = "active",
+) -> str:
+    if not _issue_requires_jira_role(issue, role, horizon=horizon):
         return "none"
-    if _issue_has_role_workload_attribution(issue, role):
+    if _issue_has_role_workload_attribution(issue, role, horizon=horizon):
         return "confirmed"
     return "unattributed"
 
@@ -448,21 +491,28 @@ def _parent_role_sp(issue: dict[str, Any], role: str) -> float:
     return 0.0
 
 
-def _role_workload_slices(issue: dict[str, Any], role: str) -> list[tuple[str, dict[str, Any]]]:
-    if not _issue_requires_jira_role(issue, role):
+def _role_workload_slices(
+    issue: dict[str, Any],
+    role: str,
+    *,
+    horizon: RoleWorkloadHorizon = "active",
+) -> list[tuple[str, dict[str, Any]]]:
+    if not _issue_requires_jira_role(issue, role, horizon=horizon):
         return []
-    name = _role_workload_assignee_name(issue, role)
-    payload = {"count": 1, "story_points": _role_sp(issue, role)}
+    name = _role_workload_assignee_name(issue, role, horizon=horizon)
+    payload = {"count": 1, "story_points": _role_sp(issue, role, horizon=horizon)}
     if name:
         return [(name, payload)]
     return [(_UNATTRIBUTED_ROLE, {**payload, "story_points": _parent_role_sp(issue, role)})]
 
 
-def _role_sp(issue: dict[str, Any], role: str) -> float:
-    if role == "qa":
-        if not _issue_in_qa_workload_scope(issue):
-            return 0.0
-    elif not _issue_in_role_workload_scope(issue, role):
+def _role_sp(
+    issue: dict[str, Any],
+    role: str,
+    *,
+    horizon: RoleWorkloadHorizon = "active",
+) -> float:
+    if not _issue_in_role_workload_scope(issue, role, horizon=horizon):
         return 0.0
 
     field_by_role = {
@@ -485,7 +535,12 @@ def _role_sp(issue: dict[str, Any], role: str) -> float:
     return 0.0
 
 
-def _role_task_summary(issue: dict[str, Any], *, role: str = "") -> dict[str, Any]:
+def _role_task_summary(
+    issue: dict[str, Any],
+    *,
+    role: str = "",
+    horizon: RoleWorkloadHorizon = "active",
+) -> dict[str, Any]:
     summary = _developer_task_summary(issue)
     summary["status_entered_at"] = issue.get("status_entered_at")
     summary["status_changed_at"] = issue.get("status_changed_at")
@@ -493,17 +548,17 @@ def _role_task_summary(issue: dict[str, Any], *, role: str = "") -> dict[str, An
     summary["role_contributors_list"] = issue.get("role_contributors_list") or []
     summary["front"] = _jira_role_assignee_name(issue, "front")
     summary["back"] = _jira_role_assignee_name(issue, "back")
-    summary["qa"] = _qa_workload_assignee_name(issue)
+    summary["qa"] = _qa_workload_assignee_name(issue, horizon=horizon)
     unresolved_roles = (role,) if role else ("front", "back", "qa")
     unresolved = {
-        role_key: _issue_unresolved_reason(issue, role_key)
+        role_key: _issue_unresolved_reason(issue, role_key, horizon=horizon)
         for role_key in unresolved_roles
-        if _issue_unresolved_reason(issue, role_key)
+        if _issue_unresolved_reason(issue, role_key, horizon=horizon)
     }
     if unresolved:
         summary["role_unresolved"] = unresolved
     if role:
-        role_sp = _role_sp(issue, role)
+        role_sp = _role_sp(issue, role, horizon=horizon)
         summary["story_points"] = role_sp if role_sp > 0 else summary.get("story_points")
     return summary
 
@@ -523,10 +578,16 @@ def _sort_role_workload_tasks(tasks: list[dict[str, Any]], role: str) -> list[di
     )
 
 
-def _role_breakdown(issues: list[dict[str, Any]], role: str, *, max_items: int = 10) -> list[dict[str, Any]]:
+def _role_breakdown(
+    issues: list[dict[str, Any]],
+    role: str,
+    *,
+    horizon: RoleWorkloadHorizon = "active",
+    max_items: int = 10,
+) -> list[dict[str, Any]]:
     buckets: dict[str, dict[str, Any]] = {}
     for issue in issues:
-        slices = _role_workload_slices(issue, role)
+        slices = _role_workload_slices(issue, role, horizon=horizon)
         for name, payload in slices:
             bucket_key = _role_bucket_key(name)
             entry = buckets.setdefault(
@@ -539,6 +600,7 @@ def _role_breakdown(issues: list[dict[str, Any]], role: str, *, max_items: int =
             task_summary = _role_task_summary(
                 issue,
                 role=role,
+                horizon=horizon,
             )
             slice_sp = float(payload.get("story_points") or 0)
             if slice_sp > 0:
@@ -566,23 +628,31 @@ def _role_breakdown(issues: list[dict[str, Any]], role: str, *, max_items: int =
     return top + [others]
 
 
-def _role_metrics(issues: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+def _role_metrics(
+    issues: list[dict[str, Any]],
+    *,
+    horizon: RoleWorkloadHorizon = "active",
+) -> dict[str, list[dict[str, Any]]]:
     return {
-        "front": _role_breakdown(issues, "front"),
-        "back": _role_breakdown(issues, "back"),
-        "qa": _role_breakdown(issues, "qa"),
+        "front": _role_breakdown(issues, "front", horizon=horizon),
+        "back": _role_breakdown(issues, "back", horizon=horizon),
+        "qa": _role_breakdown(issues, "qa", horizon=horizon),
     }
 
 
-def _role_coverage(issues: list[dict[str, Any]]) -> dict[str, dict[str, int]]:
+def _role_coverage(
+    issues: list[dict[str, Any]],
+    *,
+    horizon: RoleWorkloadHorizon = "active",
+) -> dict[str, dict[str, int]]:
     coverage: dict[str, dict[str, int]] = {}
     for role in ("front", "back", "qa"):
-        total = sum(1 for issue in issues if _issue_requires_jira_role(issue, role))
+        total = sum(1 for issue in issues if _issue_requires_jira_role(issue, role, horizon=horizon))
         confirmed = unattributed = 0
         for issue in issues:
-            if not _issue_requires_jira_role(issue, role):
+            if not _issue_requires_jira_role(issue, role, horizon=horizon):
                 continue
-            if _issue_has_role_workload_attribution(issue, role):
+            if _issue_has_role_workload_attribution(issue, role, horizon=horizon):
                 confirmed += 1
             else:
                 unattributed += 1
@@ -1456,10 +1526,14 @@ def compute_scope_metrics_from_sections(
         "unplan_by_assignee": _assignee_breakdown(unplanned_issues),
         "plan_by_developer": _developer_breakdown(planned_issues),
         "unplan_by_developer": _developer_breakdown(unplanned_issues),
-        "plan_by_role": _role_metrics(planned_issues),
-        "unplan_by_role": _role_metrics(unplanned_issues),
-        "plan_role_coverage": _role_coverage(planned_issues),
-        "unplan_role_coverage": _role_coverage(unplanned_issues),
+        "plan_by_role": _role_metrics(planned_issues, horizon="active"),
+        "unplan_by_role": _role_metrics(unplanned_issues, horizon="active"),
+        "plan_by_role_sprint": _role_metrics(planned_issues, horizon="sprint"),
+        "unplan_by_role_sprint": _role_metrics(unplanned_issues, horizon="sprint"),
+        "plan_role_coverage": _role_coverage(planned_issues, horizon="active"),
+        "unplan_role_coverage": _role_coverage(unplanned_issues, horizon="active"),
+        "plan_role_coverage_sprint": _role_coverage(planned_issues, horizon="sprint"),
+        "unplan_role_coverage_sprint": _role_coverage(unplanned_issues, horizon="sprint"),
         "plan_status_counts": _plan_status_counts(all_issues),
         "plan_change_reason_counts": _plan_change_reason_counts(all_issues),
         "sections": section_metrics,
