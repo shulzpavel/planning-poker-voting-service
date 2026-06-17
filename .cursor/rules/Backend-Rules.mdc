@@ -1,0 +1,27 @@
+---
+description: Backend rules for voting-service
+alwaysApply: true
+---
+
+# Backend Rules — voting-service
+
+## Scope
+
+- `app/**`
+- `services/**`
+- `tests/**`
+- `config.py`, `session_store.py`
+
+## Rules
+
+- Do not change `web/` unless explicitly asked.
+- Preserve API behavior unless a breaking change is required.
+- Add or update tests for changed business logic.
+
+## Output
+
+1. Backend behavior implemented
+2. API changes
+3. Files changed
+4. Risks
+5. Tests to run
