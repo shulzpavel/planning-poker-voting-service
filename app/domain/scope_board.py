@@ -62,11 +62,19 @@ def is_scope_creep(created: Optional[str], month: str) -> bool:
     return created_at >= start
 
 
-def _story_points_value(raw: Any) -> Optional[float]:
+def _nullable_story_points_value(raw: Any) -> Optional[float]:
+    """Return non-negative SP including explicit zero; None means unset."""
     if raw is None:
         return None
     if isinstance(raw, (int, float)):
-        return float(raw) if raw > 0 else None
+        return float(raw) if raw >= 0 else None
+    return None
+
+
+def _story_points_value(raw: Any) -> Optional[float]:
+    value = _nullable_story_points_value(raw)
+    if value is not None and value > 0:
+        return value
     return None
 
 
@@ -120,8 +128,8 @@ def normalize_scope_issue(raw: dict[str, Any]) -> dict[str, Any]:
         "story_points_source": raw.get("story_points_source"),
         "story_points_plan": _story_points_value(raw.get("story_points_plan")),
         "story_points_fact": _story_points_value(raw.get("story_points_fact")),
-        "story_points_dev": _story_points_value(raw.get("story_points_dev")),
-        "story_points_test": _story_points_value(raw.get("story_points_test")),
+        "story_points_dev": _nullable_story_points_value(raw.get("story_points_dev")),
+        "story_points_test": _nullable_story_points_value(raw.get("story_points_test")),
         "story_points_front": _story_points_value(raw.get("story_points_front")),
         "story_points_back": _story_points_value(raw.get("story_points_back")),
         "story_points_qa": _story_points_value(raw.get("story_points_qa")),
@@ -193,7 +201,7 @@ def _sum_sp(issues: list[dict[str, Any]]) -> float:
 
 def _track_sp_value(issue: dict[str, Any], track: Literal["dev", "test"]) -> Optional[float]:
     field = "story_points_dev" if track == "dev" else "story_points_test"
-    return _story_points_value(issue.get(field))
+    return _nullable_story_points_value(issue.get(field))
 
 
 def _sum_track_sp(issues: list[dict[str, Any]], track: Literal["dev", "test"]) -> float:
@@ -326,9 +334,9 @@ def _issue_has_jira_role_assignee(issue: dict[str, Any], role: str) -> bool:
 
 
 def _positive_story_points_test(issue: dict[str, Any]) -> float:
-    test_sp = issue.get("story_points_test")
-    if isinstance(test_sp, (int, float)) and test_sp > 0:
-        return float(test_sp)
+    test_sp = _track_sp_value(issue, "test")
+    if test_sp is not None and test_sp > 0:
+        return test_sp
     return 0.0
 
 
@@ -351,7 +359,12 @@ def _issue_has_role_workload_attribution(issue: dict[str, Any], role: str) -> bo
     if role == "qa":
         if not _issue_in_qa_workload_scope(issue):
             return False
-        return _positive_story_points_test(issue) > 0 and bool(_qa_workload_assignee_name(issue))
+        test_sp = _track_sp_value(issue, "test")
+        if test_sp is None:
+            return False
+        if test_sp == 0:
+            return True
+        return bool(_qa_workload_assignee_name(issue))
     return bool(_jira_role_assignee_name(issue, role))
 
 
@@ -397,8 +410,11 @@ def _issue_unresolved_reason(issue: dict[str, Any], role: str) -> str:
     if role == "qa":
         if _issue_has_role_workload_attribution(issue, role):
             return ""
-        if _positive_story_points_test(issue) <= 0:
+        test_sp = _track_sp_value(issue, "test")
+        if test_sp is None:
             return "jira_sp_test_empty"
+        if test_sp == 0:
+            return ""
         return "qa_user_missing"
     if _issue_has_jira_role_assignee(issue, role):
         return ""
