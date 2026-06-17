@@ -112,6 +112,8 @@ def test_build_context_includes_metrics_queues_and_questions():
     assert "Ручные вопросы PO" in context
     assert "Отчёт — задачи по колонкам" in context
     assert "Нагрузка по ролям" in context
+    assert "### Сейчас" in context
+    assert "### За спринт" in context
     assert "Plan Front" in context
     assert "Front Dev" in context
     assert "Открытые вопросы" in context
@@ -157,12 +159,21 @@ def test_build_context_includes_role_workload_coverage():
         "snapshot": {
             "metrics": {
                 "plan_role_coverage": {"back": {"attributed": 1, "total": 2, "unattributed": 1, "confirmed_jira": 1}},
+                "plan_role_coverage_sprint": {"back": {"attributed": 2, "total": 3, "unattributed": 1, "confirmed_jira": 2}},
                 "plan_by_role": {"back": [{"developer": "Не атрибутировано", "story_points": 5, "count": 1, "issues": [{"key": "FLEX-99"}]}]},
+                "plan_by_role_sprint": {
+                    "back": [
+                        {"developer": "Back Dev", "story_points": 8, "count": 2, "issues": [{"key": "FLEX-10"}, {"key": "FLEX-11"}]},
+                        {"developer": "Не атрибутировано", "story_points": 3, "count": 1, "issues": [{"key": "FLEX-99"}]},
+                    ],
+                },
             },
         },
     })
     assert "1/2" in context
+    assert "2/3" in context
     assert "FLEX-99" in context
+    assert "Back Dev" in context
 
 
 def test_build_context_uses_jira_role_rules_for_ai():

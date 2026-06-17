@@ -122,8 +122,10 @@ def _system_prompt(workload_mode: str = "sp") -> str:
         "- whats_good/whats_bad/whats_critical: по 1–3 пункта, без повтора summary.\n"
         "- recommendations: 2–3 действия с глаголом (согласовать/закрыть/перенести/оценить).\n"
         "- focus_now: 2–3 вопроса для ближайшего sync с PO, не факты.\n"
-        "- report_assessment, capacity_assessment, delivery_snapshot, role_workload_assessment, open_questions_assessment: "
+        "- report_assessment, capacity_assessment, delivery_snapshot, open_questions_assessment: "
         "по 1–2 предложения человеческим языком, без списков сырых метрик.\n"
+        "- role_workload_assessment: 2–3 предложения — отдельно «Сейчас» (активная очередь) и «За спринт» "
+        "(накопленный объём scope); где перегруз, где дыры в атрибуции Jira.\n"
         "- blockers ≤ 3; recommendations 2–3; focus_now 2–3; watch_list ≤ 2; строки ≤ 200 символов.\n"
         "Обязательно оцени отчёт по задачам, открытые вопросы, нагрузку по ролям и запас capacity. "
         "Если в контексте есть release_context — оцени релизные слоты; иначе — план vs внеплан. "
@@ -446,15 +448,22 @@ def _adjust_role_coverage(coverage: Any, stale_counts: dict[str, int]) -> dict[s
     return adjusted
 
 
-def _format_role_workload_block(metrics: dict[str, Any], snapshot: dict[str, Any]) -> str:
-    lines = [
-        "## Нагрузка по ролям (ОБЯЗАТЕЛЬНО для role_workload_assessment)",
-        "Правило атрибуции: Front, Back и QA считаются только по полям Jira (разработчик Front/Back, тестировщик).",
-        "Front/Back — задачи в работе и в тесте; QA — только задачи в тестировании.",
-    ]
-    stale_counts = {"planned": {"front": {}, "back": {}}, "unplanned": {"front": {}, "back": {}}}
-    plan_cov = metrics.get("plan_role_coverage") if isinstance(metrics.get("plan_role_coverage"), dict) else {}
-    unplan_cov = metrics.get("unplan_role_coverage") if isinstance(metrics.get("unplan_role_coverage"), dict) else {}
+def _append_role_horizon_block(
+    lines: list[str],
+    metrics: dict[str, Any],
+    *,
+    title: str,
+    rules: str,
+    plan_by_role_key: str,
+    unplan_by_role_key: str,
+    plan_cov_key: str,
+    unplan_cov_key: str,
+    stale_counts: dict[str, dict[str, dict[str, int]]],
+) -> None:
+    lines.append(f"### {title}")
+    lines.append(rules)
+    plan_cov = metrics.get(plan_cov_key) if isinstance(metrics.get(plan_cov_key), dict) else {}
+    unplan_cov = metrics.get(unplan_cov_key) if isinstance(metrics.get(unplan_cov_key), dict) else {}
     for role_label, role_key in (("Front", "front"), ("Back", "back"), ("QA", "qa")):
         plan_role_cov = _adjust_role_coverage(plan_cov.get(role_key), stale_counts["planned"].get(role_key, {}))
         unplan_role_cov = _adjust_role_coverage(unplan_cov.get(role_key), stale_counts["unplanned"].get(role_key, {}))
@@ -462,14 +471,55 @@ def _format_role_workload_block(metrics: dict[str, Any], snapshot: dict[str, Any
         lines.append(_coverage_line(f"Unplan {role_label}", unplan_role_cov))
     lines.append("")
 
-    plan_by_role = metrics.get("plan_by_role") if isinstance(metrics.get("plan_by_role"), dict) else {}
-    unplan_by_role = metrics.get("unplan_by_role") if isinstance(metrics.get("unplan_by_role"), dict) else {}
+    plan_by_role = metrics.get(plan_by_role_key) if isinstance(metrics.get(plan_by_role_key), dict) else {}
+    unplan_by_role = metrics.get(unplan_by_role_key) if isinstance(metrics.get(unplan_by_role_key), dict) else {}
     for bucket_label, role_map in (("Plan", plan_by_role), ("Unplan", unplan_by_role)):
         for role_label, role_key in (("Front", "front"), ("Back", "back"), ("QA", "qa")):
             rows = role_map.get(role_key) if isinstance(role_map, dict) else []
             lines.extend(_role_breakdown_lines(f"{bucket_label} {role_label}", rows if isinstance(rows, list) else []))
             lines.append("")
-    return "\n".join(lines)
+
+
+def _format_role_workload_block(metrics: dict[str, Any], snapshot: dict[str, Any]) -> str:
+    lines = [
+        "## Нагрузка по ролям (ОБЯЗАТЕЛЬНО для role_workload_assessment)",
+        "Правило атрибуции: Front, Back и QA считаются только по полям Jira (разработчик Front/Back, тестировщик).",
+        "Два горизонта в контексте: «Сейчас» — активная очередь; «За спринт» — накопленный объём scope board.",
+        "В role_workload_assessment опиши оба горизонта: кто перегружен сейчас и какой объём роли прошёл за спринт.",
+    ]
+    stale_counts: dict[str, dict[str, dict[str, int]]] = {
+        "planned": {"front": {}, "back": {}},
+        "unplanned": {"front": {}, "back": {}},
+    }
+    _append_role_horizon_block(
+        lines,
+        metrics,
+        title="Сейчас",
+        rules=(
+            "Front/Back — задачи в работе и на тестировании; "
+            "QA — только «Тестирование» и «К релизу»."
+        ),
+        plan_by_role_key="plan_by_role",
+        unplan_by_role_key="unplan_by_role",
+        plan_cov_key="plan_role_coverage",
+        unplan_cov_key="unplan_role_coverage",
+        stale_counts=stale_counts,
+    )
+    _append_role_horizon_block(
+        lines,
+        metrics,
+        title="За спринт",
+        rules=(
+            "Front/Back — весь scope кроме backlog и «К выполнению» (включая готово и паузу); "
+            "QA — протестировано: тестирование, к релизу и готово."
+        ),
+        plan_by_role_key="plan_by_role_sprint",
+        unplan_by_role_key="unplan_by_role_sprint",
+        plan_cov_key="plan_role_coverage_sprint",
+        unplan_cov_key="unplan_role_coverage_sprint",
+        stale_counts=stale_counts,
+    )
+    return "\n".join(lines).rstrip()
 
 
 def _board_workload_mode(board: dict[str, Any], metrics: dict[str, Any]) -> str:
@@ -834,7 +884,7 @@ def _validate_scope_payload(payload: dict[str, Any]) -> dict[str, Any]:
         "whats_critical": whats_critical,
         "report_assessment": report_assessment[:420],
         "open_questions_assessment": open_questions_assessment[:420],
-        "role_workload_assessment": role_workload_assessment[:420],
+        "role_workload_assessment": role_workload_assessment[:560],
         "role_risks": role_risks,
         "role_focus": role_focus,
         "capacity_assessment": capacity_assessment[:420],
