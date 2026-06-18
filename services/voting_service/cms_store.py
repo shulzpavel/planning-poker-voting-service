@@ -868,6 +868,16 @@ class PostgresCmsStore:
                         superadmin_role_id,
                     )
 
+                team_count = await conn.fetchval("SELECT COUNT(*) FROM cms_teams")
+                if team_count == 0:
+                    await conn.execute(
+                        """
+                        INSERT INTO cms_teams (slug, name, description, updated_at)
+                        VALUES ('default', 'Default', 'Default team', NOW())
+                        ON CONFLICT (slug) DO NOTHING
+                        """
+                    )
+
     async def _upsert_system_role(
         self,
         conn: asyncpg.Connection,
