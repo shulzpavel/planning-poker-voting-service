@@ -1860,13 +1860,18 @@ def compute_scope_refresh_delta(
 
 
 ScopeReportType = Literal["monthly", "release"]
-_RELEASE_TEAM_MARKERS = ("ios", "android", "igaming")
+# Explicit CMS team slugs that use the mobile release scope template.
+RELEASE_SCOPE_TEAM_SLUGS = frozenset({"igaming-ios", "igaming-android"})
+
+
+def normalize_scope_team_slug(slug: Optional[str]) -> str:
+    return (slug or "").strip().casefold()
 
 
 def infer_scope_report_type(team_slug: Optional[str] = None, team_name: Optional[str] = None) -> ScopeReportType:
-    """Mobile release teams use the release report template."""
-    haystack = f"{team_slug or ''} {team_name or ''}".casefold()
-    if any(marker in haystack for marker in _RELEASE_TEAM_MARKERS):
+    """Android/iOS CMS teams use the mobile release report template."""
+    del team_name
+    if normalize_scope_team_slug(team_slug) in RELEASE_SCOPE_TEAM_SLUGS:
         return "release"
     return "monthly"
 
