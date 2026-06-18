@@ -413,16 +413,16 @@ async def websocket_endpoint(websocket: WebSocket, token: str) -> None:
 
     # Run pub/sub listener and a receive task concurrently; exit when either finishes
     listen_task = asyncio.create_task(
-        redis_pubsub_listener(REDIS_URL, token, channel, websocket)
+        redis_pubsub_listener(redis_client, token, channel, websocket)
     )
 
     try:
         # Keep alive: consume any client messages (ping / close frames)
         while True:
             try:
-                await asyncio.wait_for(websocket.receive(), timeout=30)
+                await asyncio.wait_for(websocket.receive(), timeout=20)
             except asyncio.TimeoutError:
-                # Send ping to keep connection alive
+                # Send ping to keep connection alive (Cloudflare idle ~100s)
                 try:
                     await websocket.send_text(json.dumps({"type": "ping"}))
                 except Exception:

@@ -52,7 +52,9 @@ async def redis_pubsub_listener(redis_source: Any, token: str, channel: str, web
     """Subscribe to a Redis pub/sub channel and forward messages to a WebSocket.
 
     Prefer the app's already configured Redis client/pool. Passing a URL is
-    kept for compatibility with older callers and tests.
+    kept for compatibility with older callers and tests. When a shared client
+    is passed, a dedicated connection is checked out from the same pool so
+    pub/sub mode does not block regular GET/SET/PUBLISH on ``web_redis``.
     """
     import redis.asyncio as redis
 
@@ -69,7 +71,8 @@ async def redis_pubsub_listener(redis_source: Any, token: str, channel: str, web
             )
             owns_client = True
         else:
-            client = redis_source
+            client = redis.Redis(connection_pool=redis_source.connection_pool)
+            owns_client = True
         pubsub = client.pubsub()
         await pubsub.subscribe(channel)
         while True:
