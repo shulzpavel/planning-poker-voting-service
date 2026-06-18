@@ -5,6 +5,8 @@ from services.voting_service.cms_api import (
     _ScopeJqlFetchResult,
     _count_snapshot_issues,
     _scope_fetch_warnings,
+    _scope_snapshot_has_report_issue,
+    _scope_snapshot_with_report_comment,
     _scope_snapshot_with_todo_done,
     _scope_snapshot_with_todo_item,
     _scope_snapshot_without_todo_item,
@@ -58,3 +60,38 @@ def test_scope_todo_items_are_added_toggled_and_removed():
 
     removed_snapshot = _scope_snapshot_without_todo_item(done_snapshot, item_id=item["id"])
     assert removed_snapshot["todo_items"] == []
+
+
+def test_scope_report_comment_is_saved_and_removed():
+    snapshot = {
+        "sections": [{"issues": [{"key": "FLEX-1"}]}],
+        "report": {
+            "sections": [
+                {
+                    "id": "plan",
+                    "in_work": [{"key": "FLEX-1"}],
+                    "in_test": [],
+                    "done": [],
+                }
+            ]
+        },
+    }
+    saved = _scope_snapshot_with_report_comment(
+        snapshot,
+        issue_key="flex-1",
+        text="Ждём дизайн",
+        actor_name="Paul",
+        commented_at="2026-06-18T12:00:00+00:00",
+    )
+    assert saved["report_comments"]["FLEX-1"]["text"] == "Ждём дизайн"
+    assert saved["report_comments"]["FLEX-1"]["by"] == "Paul"
+    assert _scope_snapshot_has_report_issue(saved, "FLEX-1") is True
+
+    removed = _scope_snapshot_with_report_comment(
+        saved,
+        issue_key="FLEX-1",
+        text="",
+        actor_name="Paul",
+        commented_at="2026-06-18T12:05:00+00:00",
+    )
+    assert removed["report_comments"] == {}

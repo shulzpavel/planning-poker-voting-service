@@ -406,6 +406,10 @@ class ScopeIssueCommentRequest(BaseModel):
     text: str = Field(min_length=1, max_length=4000)
 
 
+class ScopeReportCommentRequest(BaseModel):
+    text: str = Field(default="", max_length=2000)
+
+
 class ScopeIssueDueDateRequest(BaseModel):
     due_date: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
 
@@ -1879,6 +1883,66 @@ def _scope_snapshot_with_comment(
     return updated
 
 
+def _scope_report_comments(snapshot: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    raw = snapshot.get("report_comments")
+    if not isinstance(raw, dict):
+        return {}
+    return {str(key): dict(value) for key, value in raw.items() if isinstance(value, dict)}
+
+
+def _scope_snapshot_has_report_issue(snapshot: dict[str, Any], issue_key: str) -> bool:
+    if _scope_snapshot_has_issue(snapshot, issue_key):
+        return True
+    target = issue_key.upper()
+    report = snapshot.get("report") or {}
+    report_sections: list[dict[str, Any]] = list(report.get("sections") or [])
+    for legacy in (report.get("plan"), report.get("unplan")):
+        if isinstance(legacy, dict):
+            report_sections.append(legacy)
+    for section in report_sections:
+        for column in ("in_work", "in_test", "done"):
+            for issue in section.get(column) or []:
+                if str(issue.get("key") or "").upper() == target:
+                    return True
+    release_context = snapshot.get("release_context") or {}
+    buckets: list[dict[str, Any]] = []
+    for slot in ("current", "previous", "next", "custom"):
+        bucket = release_context.get(slot)
+        if isinstance(bucket, dict):
+            buckets.append(bucket)
+    buckets.extend([bucket for bucket in release_context.get("releases") or [] if isinstance(bucket, dict)])
+    for bucket in buckets:
+        for column in ("in_work", "in_test", "done", "issues", "open_questions"):
+            for issue in bucket.get(column) or []:
+                if str(issue.get("key") or "").upper() == target:
+                    return True
+    return False
+
+
+def _scope_snapshot_with_report_comment(
+    snapshot: dict[str, Any],
+    *,
+    issue_key: str,
+    text: str,
+    actor_name: str,
+    commented_at: str,
+) -> dict[str, Any]:
+    updated = copy.deepcopy(snapshot or {})
+    comments = _scope_report_comments(updated)
+    target = issue_key.upper()
+    canonical_key = next((key for key in comments if key.upper() == target), issue_key.upper())
+    cleaned = text.strip()
+    if cleaned:
+        comments[canonical_key] = {"text": cleaned, "by": actor_name, "at": commented_at}
+    else:
+        comments.pop(canonical_key, None)
+        for key in list(comments):
+            if key.upper() == target:
+                comments.pop(key, None)
+    updated["report_comments"] = comments
+    return updated
+
+
 def _grooming_jira_comment(queue_label: str, comment: str, *, moved_from: Optional[int] = None, moved_to: Optional[int] = None) -> str:
     prefix = f"[Scope grooming — {queue_label}]"
     if moved_from is not None and moved_to is not None:
@@ -2427,6 +2491,7 @@ async def cms_refresh_scope_board(
     snapshot["resolved_questions"] = previous_snapshot.get("resolved_questions") or []
     snapshot["top_items"] = previous_snapshot.get("top_items") or []
     snapshot["todo_items"] = previous_snapshot.get("todo_items") or []
+    snapshot["report_comments"] = previous_snapshot.get("report_comments") or {}
     snapshot["jira_fetch_warnings"] = _scope_fetch_warnings(fetch_outcomes)
     prev_queues = previous_snapshot.get("priority_queues") or {}
     snapshot["priority_queues"] = {
@@ -2516,6 +2581,45 @@ async def cms_add_scope_issue_comment(
     await _audit(
         request,
         "cms.scope_board.issue_comment",
+        actor.username,
+        "ok",
+        {"board_id": board_id, "issue_key": issue_key},
+    )
+    return board
+
+
+@cms_router.put("/cms/scope-boards/{board_id}/issues/{issue_key}/report-comment")
+async def cms_update_scope_report_comment(
+    board_id: int,
+    issue_key: str,
+    body: ScopeReportCommentRequest,
+    request: Request,
+    actor: CmsPrincipal = Depends(require_permission(PERM_PLANNER_VIEW)),
+) -> dict:
+    existing = await _get_cms_store(request).get_scope_board(board_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Scope board not found")
+    assert_record_access(actor, existing)
+
+    snapshot = existing.get("snapshot") or {}
+    if not _scope_snapshot_has_report_issue(snapshot, issue_key):
+        raise HTTPException(status_code=404, detail="Issue not found in scope board report")
+
+    commented_at = datetime.now(timezone.utc).isoformat()
+    actor_name = actor.display_name or actor.username
+    next_snapshot = _scope_snapshot_with_report_comment(
+        snapshot,
+        issue_key=issue_key,
+        text=body.text,
+        actor_name=actor_name,
+        commented_at=commented_at,
+    )
+    board = await _get_cms_store(request).save_scope_board_snapshot(board_id, next_snapshot)
+    if not board:
+        raise HTTPException(status_code=404, detail="Scope board not found")
+    await _audit(
+        request,
+        "cms.scope_board.report_comment",
         actor.username,
         "ok",
         {"board_id": board_id, "issue_key": issue_key},
