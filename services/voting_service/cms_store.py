@@ -185,6 +185,7 @@ def _scope_board_row(row: asyncpg.Record) -> dict[str, Any]:
         "previous_release_comment": row["previous_release_comment"] if "previous_release_comment" in row.keys() else "",
         "next_release_comment": row["next_release_comment"] if "next_release_comment" in row.keys() else "",
         "custom_release_comment": row["custom_release_comment"] if "custom_release_comment" in row.keys() else "",
+        "plan_epic_key": str(row["plan_epic_key"] or "").strip() if "plan_epic_key" in row.keys() else "",
         "scope_sections": _decode_jsonb(row["scope_sections"]) if "scope_sections" in row.keys() and row["scope_sections"] is not None else None,
         "snapshot": _decode_jsonb(row["snapshot"]) if row["snapshot"] is not None else None,
         "ai_summary": _decode_jsonb(row["ai_summary"]) if "ai_summary" in row.keys() and row["ai_summary"] is not None else None,
@@ -740,6 +741,8 @@ class PostgresCmsStore:
                 ADD COLUMN IF NOT EXISTS capacity_sp_dev NUMERIC(10, 2);
             ALTER TABLE cms_scope_boards
                 ADD COLUMN IF NOT EXISTS capacity_sp_test NUMERIC(10, 2);
+            ALTER TABLE cms_scope_boards
+                ADD COLUMN IF NOT EXISTS plan_epic_key TEXT NOT NULL DEFAULT '';
             CREATE INDEX IF NOT EXISTS idx_cms_scope_boards_updated
                 ON cms_scope_boards(updated_at DESC, id DESC);
 
@@ -1991,6 +1994,7 @@ class PostgresCmsStore:
                b.next_release_jql, b.custom_release_name, b.custom_release_jql,
                b.release_queries,
                b.release_comment, b.previous_release_comment, b.next_release_comment, b.custom_release_comment,
+               b.plan_epic_key,
                b.scope_sections, b.snapshot,
                b.ai_summary, b.ai_summary_history, b.layout_order,
                b.created_by, b.created_at, b.updated_at, b.team_id,
@@ -2061,6 +2065,7 @@ class PostgresCmsStore:
         previous_release_comment: str = "",
         next_release_comment: str = "",
         custom_release_comment: str = "",
+        plan_epic_key: str = "",
         scope_sections: Optional[list[dict[str, Any]]] = None,
         created_by: Optional[int] = None,
         team_id: Optional[int] = None,
@@ -2073,8 +2078,8 @@ class PostgresCmsStore:
                      report_type, previous_release_jql, next_release_jql, custom_release_name, custom_release_jql,
                      release_queries,
                      release_comment, previous_release_comment, next_release_comment, custom_release_comment,
-                     scope_sections, created_by, team_id)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16::jsonb, $17, $18, $19, $20, $21::jsonb, $22, $23)
+                     plan_epic_key, scope_sections, created_by, team_id)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16::jsonb, $17, $18, $19, $20, $21, $22::jsonb, $23, $24)
                 RETURNING id
                 """,
                 name.strip(),
@@ -2097,6 +2102,7 @@ class PostgresCmsStore:
                 previous_release_comment.strip(),
                 next_release_comment.strip(),
                 custom_release_comment.strip(),
+                plan_epic_key.strip().upper(),
                 json.dumps(scope_sections) if scope_sections is not None else None,
                 created_by,
                 team_id,
@@ -2129,6 +2135,7 @@ class PostgresCmsStore:
         previous_release_comment: str = "",
         next_release_comment: str = "",
         custom_release_comment: str = "",
+        plan_epic_key: str = "",
         scope_sections: Optional[list[dict[str, Any]]] = None,
     ) -> Optional[dict[str, Any]]:
         async with self.pool.acquire() as conn:
@@ -2155,7 +2162,8 @@ class PostgresCmsStore:
                     previous_release_comment = $19,
                     next_release_comment = $20,
                     custom_release_comment = $21,
-                    scope_sections = $22::jsonb,
+                    plan_epic_key = $22,
+                    scope_sections = $23::jsonb,
                     updated_at = NOW()
                 WHERE id = $1
                 RETURNING id
@@ -2181,6 +2189,7 @@ class PostgresCmsStore:
                 previous_release_comment.strip(),
                 next_release_comment.strip(),
                 custom_release_comment.strip(),
+                plan_epic_key.strip().upper(),
                 json.dumps(scope_sections) if scope_sections is not None else None,
             )
         if not updated:
@@ -2306,6 +2315,38 @@ class PostgresCmsStore:
                 board_id,
                 json.dumps(ai_summary),
                 json.dumps(history),
+            )
+        if not updated:
+            return None
+        return await self.get_scope_board(board_id)
+
+    async def merge_scope_board_ai_summary_jira_export(
+        self,
+        board_id: int,
+        jira_export: dict[str, Any],
+    ) -> Optional[dict[str, Any]]:
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT ai_summary FROM cms_scope_boards WHERE id = $1",
+                board_id,
+            )
+            if not row:
+                return None
+            current = _decode_jsonb(row["ai_summary"])
+            if not isinstance(current, dict):
+                return await self.get_scope_board(board_id)
+            merged = dict(current)
+            merged["jira_export"] = jira_export
+            updated = await conn.fetchrow(
+                """
+                UPDATE cms_scope_boards
+                SET ai_summary = $2::jsonb,
+                    updated_at = NOW()
+                WHERE id = $1
+                RETURNING id
+                """,
+                board_id,
+                json.dumps(merged),
             )
         if not updated:
             return None

@@ -159,6 +159,45 @@ def build_ai_summary_comment_adf(
     return {"type": "doc", "version": 1, "content": content}
 
 
+async def export_adf_comment_to_jira(
+    client: Any,
+    *,
+    issue_key: str,
+    adf: Mapping[str, Any],
+    content_hash: str,
+    previous_export: Optional[Mapping[str, Any]] = None,
+) -> dict[str, Any]:
+    """Post or update a Jira comment with ADF. Returns jira_export metadata."""
+    previous = previous_export if isinstance(previous_export, dict) else None
+    if previous and previous.get("status") == "ok" and previous.get("hash") == content_hash:
+        return dict(previous)
+
+    comment_id = str((previous or {}).get("comment_id") or "").strip() or None
+
+    try:
+        if comment_id:
+            result = await client.update_issue_comment_adf(issue_key, comment_id, adf)
+            cid = str(result.get("comment_id") or comment_id)
+        else:
+            result = await client.add_issue_comment_adf(issue_key, adf)
+            cid = str(result.get("comment_id") or "")
+        return {
+            "status": "ok",
+            "hash": content_hash,
+            "comment_id": cid or None,
+            "exported_at": datetime.now(timezone.utc).isoformat(),
+        }
+    except Exception as exc:
+        logger.warning("Jira ADF comment export failed key=%s err=%r", issue_key, exc)
+        return {
+            "status": "error",
+            "hash": content_hash,
+            "comment_id": comment_id,
+            "error": str(exc)[:500],
+            "exported_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+
 async def export_ai_summary_to_jira(
     client: Any,
     *,
@@ -174,27 +213,10 @@ async def export_ai_summary_to_jira(
         return dict(previous or {})
 
     adf = build_ai_summary_comment_adf(summary, issue_key=issue_key, task_summary=task_summary)
-    comment_id = str((previous or {}).get("comment_id") or "").strip() or None
-
-    try:
-        if comment_id:
-            result = await client.update_issue_comment_adf(issue_key, comment_id, adf)
-            cid = str(result.get("comment_id") or comment_id)
-        else:
-            result = await client.add_issue_comment_adf(issue_key, adf)
-            cid = str(result.get("comment_id") or "")
-        return {
-            "status": "ok",
-            "hash": summary_hash,
-            "comment_id": cid or None,
-            "exported_at": datetime.now(timezone.utc).isoformat(),
-        }
-    except Exception as exc:
-        logger.warning("AI summary Jira export failed key=%s err=%r", issue_key, exc)
-        return {
-            "status": "error",
-            "hash": summary_hash,
-            "comment_id": comment_id,
-            "error": str(exc)[:500],
-            "exported_at": datetime.now(timezone.utc).isoformat(),
-        }
+    return await export_adf_comment_to_jira(
+        client,
+        issue_key=issue_key,
+        adf=adf,
+        content_hash=summary_hash,
+        previous_export=previous,
+    )

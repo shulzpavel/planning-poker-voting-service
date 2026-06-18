@@ -57,6 +57,13 @@ async def run_scope_ai_job(
         snapshot_refreshed_at = snapshot.get("refreshed_at") if isinstance(snapshot, dict) else None
         cached = find_cached_scope_summary(board, snapshot_refreshed_at)
         if cached:
+            spawn_scope_ai_jira_export(
+                app,
+                board_id=board_id,
+                board=board,
+                summary=dict(cached),
+                actor_username=actor_username,
+            )
             return {"ai_summary": cached, "board": _slim_scope_board_for_job(board), "cached": True}
 
         if http_session is None:
@@ -93,6 +100,13 @@ async def run_scope_ai_job(
             board_id,
             actor_username,
             summary.get("health"),
+        )
+        spawn_scope_ai_jira_export(
+            app,
+            board_id=board_id,
+            board=updated,
+            summary=dict(summary),
+            actor_username=actor_username,
         )
         return {"ai_summary": summary, "board": _slim_scope_board_for_job(updated), "cached": False}
 
@@ -373,6 +387,79 @@ def spawn_session_ai_jira_export(
             task_id=task_id,
             issue_key=issue_key,
             summary=summary,
+            actor_username=actor_username,
+        )
+    )
+
+
+async def run_scope_ai_jira_export(
+    app,
+    *,
+    board_id: int,
+    issue_key: str,
+    summary: dict[str, Any],
+    board_name: str,
+    board_month: str,
+    actor_username: str,
+) -> None:
+    """Fire-and-forget export of scope AI summary to the configured Plan epic."""
+    from app.adapters.jira_service_client import JiraServiceHttpClient
+    from services.voting_service.ai_summary_jira_export import ai_summary_jira_export_enabled
+    from services.voting_service.scope_ai_jira_export import (
+        export_scope_ai_summary_to_jira,
+        should_skip_scope_jira_export,
+    )
+
+    if not ai_summary_jira_export_enabled() or not issue_key:
+        return
+    if should_skip_scope_jira_export(summary):
+        return
+
+    store = app.state.cms_store
+    client = JiraServiceHttpClient()
+    try:
+        jira_export = await export_scope_ai_summary_to_jira(
+            client,
+            issue_key=issue_key,
+            summary=summary,
+            board_name=board_name,
+            board_month=board_month,
+        )
+        await store.merge_scope_board_ai_summary_jira_export(board_id, jira_export)
+        logger.info(
+            "scope AI Jira export board_id=%s key=%s status=%s actor=%s",
+            board_id,
+            issue_key,
+            jira_export.get("status"),
+            actor_username,
+        )
+    finally:
+        await client.close()
+
+
+def spawn_scope_ai_jira_export(
+    app,
+    *,
+    board_id: int,
+    board: dict[str, Any],
+    summary: dict[str, Any],
+    actor_username: str,
+) -> None:
+    from services.voting_service.ai_jobs import spawn_ai_job
+    from services.voting_service.scope_ai_jira_export import normalize_plan_epic_key
+
+    issue_key = normalize_plan_epic_key(board.get("plan_epic_key"))
+    if not issue_key:
+        return
+
+    spawn_ai_job(
+        run_scope_ai_jira_export(
+            app,
+            board_id=board_id,
+            issue_key=issue_key,
+            summary=summary,
+            board_name=str(board.get("name") or "Отчёт месяца"),
+            board_month=str(board.get("month") or ""),
             actor_username=actor_username,
         )
     )

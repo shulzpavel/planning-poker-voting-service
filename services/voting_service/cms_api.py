@@ -71,6 +71,7 @@ from services.voting_service.cms_team_access import (
     team_scope,
 )
 from services.voting_service.rate_limit import enforce_rate_limit
+from services.voting_service.scope_ai_jira_export import normalize_plan_epic_key
 from services.voting_service.cms_rbac import (
     PERM_ACCESS_MANAGE,
     PERM_ACCESS_VIEW,
@@ -319,6 +320,7 @@ class ScopeBoardCreateRequest(BaseModel):
     previous_release_comment: str = Field(default="", max_length=8000)
     next_release_comment: str = Field(default="", max_length=8000)
     custom_release_comment: str = Field(default="", max_length=8000)
+    plan_epic_key: str = Field(default="", max_length=64)
     team_id: Optional[int] = None
 
 
@@ -343,6 +345,7 @@ class ScopeBoardUpdateRequest(BaseModel):
     previous_release_comment: str = Field(default="", max_length=8000)
     next_release_comment: str = Field(default="", max_length=8000)
     custom_release_comment: str = Field(default="", max_length=8000)
+    plan_epic_key: str = Field(default="", max_length=64)
 
 
 class ScopeBoardReleaseCommentsRequest(BaseModel):
@@ -1744,6 +1747,7 @@ def _scope_board_payload_from_request(
         "next_release_comment": body.next_release_comment,
         "custom_release_comment": body.custom_release_comment,
         "scope_sections": scope_sections,
+        "plan_epic_key": normalize_plan_epic_key(body.plan_epic_key),
     }
 
 
@@ -2999,6 +3003,15 @@ async def cms_analyze_scope_board(
     snapshot_refreshed_at = snapshot.get("refreshed_at") if isinstance(snapshot, dict) else None
     cached = find_cached_scope_summary(board, snapshot_refreshed_at)
     if cached:
+        from services.voting_service.ai_job_runners import spawn_scope_ai_jira_export
+
+        spawn_scope_ai_jira_export(
+            request.app,
+            board_id=board_id,
+            board=board,
+            summary=dict(cached),
+            actor_username=actor.username,
+        )
         await _audit(
             request,
             "cms.scope_board.analyze",
@@ -3043,6 +3056,15 @@ async def cms_analyze_scope_board(
     )
     if not updated:
         raise HTTPException(status_code=404, detail="Scope board not found")
+    from services.voting_service.ai_job_runners import spawn_scope_ai_jira_export
+
+    spawn_scope_ai_jira_export(
+        request.app,
+        board_id=board_id,
+        board=updated,
+        summary=dict(summary),
+        actor_username=actor.username,
+    )
     await _audit(
         request,
         "cms.scope_board.analyze",
