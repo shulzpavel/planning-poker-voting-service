@@ -6,8 +6,24 @@ on:
     branches: [main]
 
 jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      deploy: ${{ steps.filter.outputs.deploy }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            deploy:
+              - '**'
+              - '!README.md'
+              - '!docs/**'
+
   notify-start:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.changes.outputs.deploy == 'true'
+    needs: [changes]
     uses: shulzpavel/planning-poker-dev/.github/workflows/ci-notify-start.yml@main
     with:
       service_label: voting-service
@@ -35,8 +51,8 @@ jobs:
 
   deploy:
     name: Deploy voting-service to production
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [test, docker]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.changes.outputs.deploy == 'true'
+    needs: [test, docker, changes]
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -55,8 +71,8 @@ jobs:
             ./infra/deploy/deploy-service-prod.sh voting-service
 
   notify-result:
-    if: always() && !cancelled()
-    needs: [test, docker, deploy]
+    if: always() && !cancelled() && (needs.changes.outputs.deploy == 'true' || needs.test.result == 'failure' || needs.docker.result == 'failure')
+    needs: [test, docker, deploy, changes]
     uses: shulzpavel/planning-poker-dev/.github/workflows/ci-notify-result.yml@main
     with:
       service_label: voting-service
