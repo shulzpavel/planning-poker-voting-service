@@ -1,6 +1,6 @@
 """Health check endpoints for Voting Service."""
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Request, Response
 from pydantic import BaseModel
 
 from services.voting_service.health_checks import check_voting_readiness
@@ -22,7 +22,7 @@ async def health_check() -> HealthResponse:
 
 
 @router.get("/ready")
-async def readiness_check(request: Request) -> dict:
+async def readiness_check(request: Request, response: Response) -> dict:
     """Readiness: ping lifespan-managed Redis/Postgres clients (no new pools)."""
     try:
         await check_voting_readiness(
@@ -32,6 +32,7 @@ async def readiness_check(request: Request) -> dict:
         )
         return {"status": "ready"}
     except Exception as exc:  # noqa: BLE001
+        response.status_code = 503
         return {"status": "not_ready", "error": str(exc)}
 
 

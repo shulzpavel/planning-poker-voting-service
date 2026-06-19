@@ -109,7 +109,7 @@ def test_readiness_endpoint_reports_missing_web_redis() -> None:
     with TestClient(app) as client:
         response = client.get("/health/ready")
 
-    assert response.status_code == 200
+    assert response.status_code == 503
     body = response.json()
     assert body["status"] == "not_ready"
     assert "web_redis" in body["error"]
