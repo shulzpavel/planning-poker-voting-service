@@ -21,6 +21,7 @@ import asyncpg
 
 from app.domain.session import Session, SessionFactory
 from app.domain.task import Task
+from app.domain.scope_flow_pace import apply_flow_pace_chart_order, normalize_flow_pace_chart_order
 from services.voting_service.cms_rbac import (
     ALL_PERMISSION_KEYS,
     CMS_PAGE_DEFINITIONS,
@@ -191,12 +192,23 @@ def _scope_board_row(row: asyncpg.Record) -> dict[str, Any]:
         "ai_summary": _decode_jsonb(row["ai_summary"]) if "ai_summary" in row.keys() and row["ai_summary"] is not None else None,
         "ai_summary_history": _decode_jsonb(row["ai_summary_history"]) if "ai_summary_history" in row.keys() and row["ai_summary_history"] is not None else [],
         "layout_order": _decode_jsonb(row["layout_order"]) if "layout_order" in row.keys() and row["layout_order"] is not None else [],
+        "flow_pace_chart_order": _decode_jsonb(row["flow_pace_chart_order"])
+        if "flow_pace_chart_order" in row.keys() and row["flow_pace_chart_order"] is not None
+        else [],
         "created_by": int(row["created_by"]) if row["created_by"] is not None else None,
         "created_by_username": row["created_by_username"] if "created_by_username" in row.keys() else None,
         "created_by_display_name": row["created_by_display_name"] if "created_by_display_name" in row.keys() else None,
         "created_at": created_at.isoformat() if isinstance(created_at, datetime) else created_at,
         "updated_at": updated_at.isoformat() if isinstance(updated_at, datetime) else updated_at,
     }
+    order = normalize_flow_pace_chart_order(data.get("flow_pace_chart_order"))
+    data["flow_pace_chart_order"] = order
+    snapshot = data.get("snapshot")
+    if isinstance(snapshot, dict) and snapshot.get("flow_pace") is not None:
+        data["snapshot"] = {
+            **snapshot,
+            "flow_pace": apply_flow_pace_chart_order(snapshot.get("flow_pace"), order),
+        }
     return _attach_team_fields(data, row)
 
 
@@ -717,6 +729,8 @@ class PostgresCmsStore:
                 ADD COLUMN IF NOT EXISTS ai_summary_history JSONB NOT NULL DEFAULT '[]'::jsonb;
             ALTER TABLE cms_scope_boards
                 ADD COLUMN IF NOT EXISTS layout_order JSONB NOT NULL DEFAULT '[]'::jsonb;
+            ALTER TABLE cms_scope_boards
+                ADD COLUMN IF NOT EXISTS flow_pace_chart_order JSONB NOT NULL DEFAULT '[]'::jsonb;
             ALTER TABLE cms_scope_boards
                 ADD COLUMN IF NOT EXISTS report_type TEXT NOT NULL DEFAULT 'monthly';
             ALTER TABLE cms_scope_boards
@@ -2008,7 +2022,7 @@ class PostgresCmsStore:
                b.release_comment, b.previous_release_comment, b.next_release_comment, b.custom_release_comment,
                b.plan_epic_key,
                b.scope_sections, b.snapshot,
-               b.ai_summary, b.ai_summary_history, b.layout_order,
+               b.ai_summary, b.ai_summary_history, b.layout_order, b.flow_pace_chart_order,
                b.created_by, b.created_at, b.updated_at, b.team_id,
                t.name AS team_name, t.slug AS team_slug,
                a.username AS created_by_username,
@@ -2264,6 +2278,37 @@ class PostgresCmsStore:
                 """,
                 board_id,
                 json.dumps(cleaned),
+            )
+        if not updated:
+            return None
+        return await self.get_scope_board(board_id)
+
+    async def update_scope_board_flow_pace_chart_order(
+        self,
+        board_id: int,
+        chart_order: list[str],
+    ) -> Optional[dict[str, Any]]:
+        if not isinstance(chart_order, list):
+            raise ValueError("chart_order must be a list")
+        cleaned: list[str] = []
+        for item in chart_order:
+            if not isinstance(item, str):
+                raise ValueError("chart_order items must be strings")
+            key = item.strip()
+            if not key:
+                raise ValueError("chart_order items must be non-empty strings")
+            cleaned.append(key)
+        normalized = normalize_flow_pace_chart_order(cleaned)
+        async with self.pool.acquire() as conn:
+            updated = await conn.fetchrow(
+                """
+                UPDATE cms_scope_boards
+                SET flow_pace_chart_order = $2::jsonb, updated_at = NOW()
+                WHERE id = $1
+                RETURNING id
+                """,
+                board_id,
+                json.dumps(normalized),
             )
         if not updated:
             return None

@@ -31,6 +31,7 @@ from app.domain.scope_board import (
     apply_priority_queue_reorder,
     build_release_context,
     build_scope_snapshot,
+    clear_priority_queue_ranked,
     compute_scope_metrics,
     compute_scope_metrics_from_sections,
     compute_scope_report,
@@ -52,6 +53,11 @@ from app.domain.scope_board import (
     queue_significance_positions,
     release_scope_sections,
     sync_legacy_jql_from_sections,
+)
+from app.domain.scope_flow_pace import (
+    apply_flow_pace_chart_order,
+    compute_scope_flow_pace,
+    normalize_flow_pace_chart_order,
 )
 from app.usecases.close_session import CloseSessionUseCase
 from app.usecases.manage_tasks import (
@@ -363,11 +369,16 @@ class ScopeBoardLayoutRequest(BaseModel):
     layout_order: list[str] = Field(min_length=1, max_length=20)
 
 
+class ScopeBoardFlowPaceChartOrderRequest(BaseModel):
+    chart_order: list[str] = Field(min_length=1, max_length=12)
+
+
 SCOPE_LAYOUT_BLOCK_KEYS = frozenset({
     "topItems",
     "capacity",
     "roleWorkload",
     "planInsights",
+    "flowPace",
     "aiSummary",
     "report",
     "priorityQueues",
@@ -381,6 +392,7 @@ DEFAULT_SCOPE_LAYOUT_ORDER = [
     "capacity",
     "roleWorkload",
     "planInsights",
+    "flowPace",
     "aiSummary",
     "report",
     "priorityQueues",
@@ -404,6 +416,10 @@ def _normalize_scope_layout_order(layout_order: list[str]) -> list[str]:
             cleaned.append(key)
             seen.add(key)
     return cleaned
+
+
+def _normalize_flow_pace_chart_order(chart_order: list[str]) -> list[str]:
+    return normalize_flow_pace_chart_order(chart_order)
 
 
 class ScopeIssueCommentRequest(BaseModel):
@@ -2362,6 +2378,36 @@ async def cms_update_scope_board_layout(
     return board
 
 
+@cms_router.patch("/cms/scope-boards/{board_id}/flow-pace-chart-order")
+@cms_router.patch("/cms/scope-boards/{board_id}/flow-pace-chart-order/")
+async def cms_update_scope_board_flow_pace_chart_order(
+    board_id: int,
+    body: ScopeBoardFlowPaceChartOrderRequest,
+    request: Request,
+    actor: CmsPrincipal = Depends(require_permission(PERM_PLANNER_VIEW)),
+) -> dict:
+    existing = await _get_cms_store(request).get_scope_board(board_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Scope board not found")
+    assert_record_access(actor, existing)
+
+    normalized = _normalize_flow_pace_chart_order(body.chart_order)
+    try:
+        board = await _get_cms_store(request).update_scope_board_flow_pace_chart_order(board_id, normalized)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if not board:
+        raise HTTPException(status_code=404, detail="Scope board not found")
+    await _audit(
+        request,
+        "cms.scope_board.flow_pace_chart_order_update",
+        actor.username,
+        "ok",
+        {"board_id": board_id},
+    )
+    return board
+
+
 @cms_router.patch("/cms/scope-boards/{board_id}/release-comments")
 @cms_router.patch("/cms/scope-boards/{board_id}/release-comments/")
 async def cms_update_scope_board_release_comments(
@@ -2617,6 +2663,15 @@ async def cms_refresh_scope_board(
             release_issues_by_slot={slot: outcome.issues for slot, outcome in release_outcomes.items()},
             version_meta_by_slot=release_version_meta_map,
         )
+    team_slug = (existing.get("team") or {}).get("slug")
+    if not team_slug:
+        board_name = str(existing.get("name") or "").lower()
+        if "igaming rip" in board_name:
+            team_slug = "igaming-rip"
+    flow_pace = compute_scope_flow_pace(snapshot, team_slug=team_slug)
+    if flow_pace is not None:
+        flow_pace = apply_flow_pace_chart_order(flow_pace, existing.get("flow_pace_chart_order"))
+        snapshot["flow_pace"] = flow_pace
     board = await _get_cms_store(request).save_scope_board_snapshot(board_id, snapshot)
     if not board:
         raise HTTPException(status_code=404, detail="Scope board not found")
@@ -3032,7 +3087,7 @@ async def cms_reorder_scope_priority_queue(
     board = await _get_cms_store(request).save_scope_board_snapshot(board_id, next_snapshot)
     if not board:
         raise HTTPException(status_code=404, detail="Scope board not found")
-    ranked_order = list(next_queue.get("ranked_order") or next_queue.get("order") or [])
+    ranked_order = list(next_queue.get("ranked_order") or [])
     removed_from_ranked = list(next_queue.get("removed_from_ranked") or [])
     significance_failures = await _sync_queue_significance_to_jira(
         ranked_order,
@@ -3063,6 +3118,51 @@ async def cms_reorder_scope_priority_queue(
             "board_id": board_id,
             "queue": kind,
             "issue_key": moved_key,
+            "significance_failures": significance_failures[:20],
+        },
+    )
+    return board
+
+
+@cms_router.post("/cms/scope-boards/{board_id}/queues/{queue_kind}/reset-ranked")
+async def cms_reset_scope_priority_queue_ranked(
+    board_id: int,
+    queue_kind: str,
+    request: Request,
+    actor: CmsPrincipal = Depends(require_permission(PERM_PLANNER_VIEW)),
+) -> dict:
+    kind = _parse_priority_queue_kind(queue_kind)
+    existing = await _get_cms_store(request).get_scope_board(board_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Scope board not found")
+    assert_record_access(actor, existing)
+
+    snapshot = existing.get("snapshot") or {}
+    queues = dict(snapshot.get("priority_queues") or {})
+    current_queue = queues.get(kind) or {"ranked_order": [], "issues": [], "history": []}
+    next_queue, keys_to_clear = clear_priority_queue_ranked(current_queue)
+
+    next_snapshot = copy.deepcopy(snapshot)
+    next_queues = dict(next_snapshot.get("priority_queues") or {})
+    next_queues[kind] = next_queue
+    next_snapshot["priority_queues"] = next_queues
+    board = await _get_cms_store(request).save_scope_board_snapshot(board_id, next_snapshot)
+    if not board:
+        raise HTTPException(status_code=404, detail="Scope board not found")
+
+    significance_failures: list[str] = []
+    if keys_to_clear:
+        significance_failures = await _clear_queue_significance_in_jira(keys_to_clear)
+
+    await _audit(
+        request,
+        "cms.scope_board.queue_reset_ranked",
+        actor.username,
+        "ok",
+        {
+            "board_id": board_id,
+            "queue": kind,
+            "cleared_count": len(keys_to_clear),
             "significance_failures": significance_failures[:20],
         },
     )

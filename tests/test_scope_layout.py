@@ -17,3 +17,8 @@ def test_normalize_scope_layout_order_filters_unknown_and_appends_missing() -> N
 def test_normalize_scope_layout_order_preserves_known_order() -> None:
     custom = list(reversed(DEFAULT_SCOPE_LAYOUT_ORDER))
     assert _normalize_scope_layout_order(custom) == custom
+
+
+def test_normalize_scope_layout_order_includes_flow_pace() -> None:
+    assert "flowPace" in DEFAULT_SCOPE_LAYOUT_ORDER
+    assert "flowPace" in _normalize_scope_layout_order(["topItems"])
