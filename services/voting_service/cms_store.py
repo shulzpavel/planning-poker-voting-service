@@ -2609,6 +2609,17 @@ class PostgresCmsStore:
                 actor_team_ids,
                 team_id,
             )
+            scope_boards = await conn.fetchval(
+                """
+                SELECT COUNT(*)::bigint
+                FROM cms_scope_boards b
+                WHERE ($1::boolean OR b.team_id IS NULL OR b.team_id = ANY($2::bigint[]))
+                  AND ($3::bigint IS NULL OR b.team_id IS NOT DISTINCT FROM $3)
+                """,
+                is_superuser,
+                actor_team_ids,
+                team_id,
+            )
             retros = await conn.fetchrow(
                 """
                 SELECT
@@ -2640,6 +2651,7 @@ class PostgresCmsStore:
                 **_row_to_dict(tokens),
                 **_row_to_dict(retros),
                 "total_sprint_plans": sprint_plans or 0,
+                "total_scope_boards": scope_boards or 0,
                 "votes_rows": votes or 0,
             }
 
