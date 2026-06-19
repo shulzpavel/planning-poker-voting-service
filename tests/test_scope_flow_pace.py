@@ -302,7 +302,42 @@ def test_flow_pace_charts_from_done_issues():
     assert "detail_segments" in cycle
 
 
-def test_cycle_time_uses_created_when_start_date_missing():
+def test_phase_time_chart_has_only_work_phases():
+    now = datetime(2026, 6, 19, 12, 0, tzinfo=timezone.utc)
+    snapshot = _snapshot(
+        (
+            "plan",
+            "parent=FLEX-2861",
+            [
+                _issue(
+                    "FLEX-10",
+                    status="Готово",
+                    category="done",
+                    start_date="2026-06-01",
+                    resolution_date="2026-06-10",
+                ),
+            ],
+        ),
+    )
+    snapshot["sections"][0]["issues"][0]["status_bucket_durations"] = {
+        "dev": 3.0,
+        "test": 2.0,
+        "pause": 1.0,
+        "todo": 5.0,
+        "done": 2.0,
+        "other": 4.0,
+    }
+
+    result = compute_scope_flow_pace(snapshot, team_slug="igaming-rip", now=now)
+    phase = next(item for item in result["charts"]["donuts"] if item["id"] == "phase_time")
+    segment_keys = {segment["key"] for segment in phase["segments"]}
+    assert segment_keys == {"dev", "test", "pause"}
+    assert phase["segments"][0]["value"] == 3.0
+    assert "прочее" not in phase["methodology"].lower()
+    assert "Не фазы" in phase["methodology"]
+    detail_keys = {segment["key"] for segment in phase["detail_segments"]}
+    assert detail_keys == {"dev", "test", "pause"}
+    assert all("Прочее" not in item.get("metric_label", "") for segment in phase["detail_segments"] for item in segment["items"])
     now = datetime(2026, 6, 19, 12, 0, tzinfo=timezone.utc)
     snapshot = _snapshot(
         (

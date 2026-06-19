@@ -45,6 +45,15 @@ FLOW_PACE_TEAM_PROFILE = {
     "target_done_per_week": 8,
 }
 
+PHASE_TIME_METHODOLOGY = (
+    "Сумма дней в трёх рабочих фазах по Jira changelog (status_bucket_durations), только закрытые задачи. "
+    "Dev — разработка: in progress, разработ, в работе и другие dev-статусы (JIRA_DEV_STATUS_KEYWORDS), "
+    "кроме test/pause. Test/Release — test, qa, тестирование, к тестированию, к релизу. "
+    "Пауза — pause, on hold, blocked, пауз, блок. "
+    "Не фазы (в donut не входят): backlog/todo/open, Готово/done и прочие нераспознанные статусы. "
+    "Задача может быть в нескольких сегментах детализации, если провела время в разных фазах."
+)
+
 _THROUGHPUT_WINDOW_DAYS = 7
 _DONE_STATUS_NAMES = frozenset({"готово", "done", "closed", "resolved", "cancelled", "canceled"})
 _PAUSE_STATUS_KEYWORDS = ("пауз", "pause", "on hold", "blocked", "блок")
@@ -1215,7 +1224,7 @@ def _compute_flow_pace_charts(
     qa_heavy_done = 0
     balanced_done = 0
     dev_heavy_done = 0
-    phase_totals = {"dev": 0.0, "test": 0.0, "pause": 0.0, "other": 0.0}
+    phase_totals = {"dev": 0.0, "test": 0.0, "pause": 0.0}
 
     done_mix_items: list[dict[str, Any]] = []
     throughput_items: list[dict[str, Any]] = []
@@ -1306,14 +1315,7 @@ def _compute_flow_pace_charts(
         dev_days = float(buckets.get("dev") or 0.0)
         test_days = float(buckets.get("test") or 0.0)
         pause_days = float(buckets.get("pause") or 0.0)
-        other_days = (
-            float(buckets.get("todo") or 0.0)
-            + float(buckets.get("done") or 0.0)
-            + float(buckets.get("other") or 0.0)
-        )
-        phase_detail = (
-            f"Dev {dev_days:.1f} · Test {test_days:.1f} · Pause {pause_days:.1f} · Прочее {other_days:.1f} дн."
-        )
+        phase_detail = f"Dev {dev_days:.1f} · Test {test_days:.1f} · Pause {pause_days:.1f} дн."
         if dev_days > 0:
             phase_items.append(
                 _chart_detail_item(
@@ -1350,18 +1352,6 @@ def _compute_flow_pace_charts(
                     issue_url=issue_url,
                 )
             )
-        if other_days > 0:
-            phase_items.append(
-                _chart_detail_item(
-                    segment_key="other",
-                    issue_key=key,
-                    summary=summary,
-                    metric_label="Прочее",
-                    metric_value=f"{other_days:.1f} дн.",
-                    detail=phase_detail,
-                    issue_url=issue_url,
-                )
-            )
 
         qa_bucket = _qa_iteration_bucket(dev_days, test_days)
         if qa_bucket == "qa_heavy":
@@ -1392,7 +1382,6 @@ def _compute_flow_pace_charts(
         phase_totals["dev"] += dev_days
         phase_totals["test"] += test_days
         phase_totals["pause"] += pause_days
-        phase_totals["other"] += other_days
 
     median_cycle = None
     if cycle_values:
@@ -1510,19 +1499,14 @@ def _compute_flow_pace_charts(
                 {"key": "dev", "label": "Dev", "value": round(phase_totals["dev"], 1), "color": "#6366f1"},
                 {"key": "test", "label": "Test/Release", "value": round(phase_totals["test"], 1), "color": "#8b5cf6"},
                 {"key": "pause", "label": "Пауза", "value": round(phase_totals["pause"], 1), "color": "#94a3b8"},
-                {"key": "other", "label": "Прочее", "value": round(phase_totals["other"], 1), "color": "#cbd5e1"},
             ],
-            methodology=(
-                "Сумма дней в статусах по bucket из Jira changelog (dev / test+release / pause / прочее). "
-                "Задача может быть в нескольких сегментах, если провела время в нескольких фазах."
-            ),
+            methodology=PHASE_TIME_METHODOLOGY,
             detail_segments=_group_detail_segments(
                 phase_items,
                 [
                     ("dev", "Dev"),
                     ("test", "Test/Release"),
                     ("pause", "Пауза"),
-                    ("other", "Прочее"),
                 ],
             ),
         ),
