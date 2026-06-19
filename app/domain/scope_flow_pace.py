@@ -46,8 +46,11 @@ FLOW_PACE_TEAM_PROFILE = {
 }
 
 STATUS_TIME_METHODOLOGY = (
-    "Сумма дней нахождения закрытых задач в каждом статусе Jira по changelog (status_durations). "
-    "Каждый переход фиксирует интервал entered→left; текущий статус — до resolution или «сейчас». "
+    "Сумма дней нахождения закрытых задач в рабочих статусах Jira по changelog. "
+    "Интервал каждого статуса — от входа до следующего перехода; для закрытых задач "
+    "последний интервал обрезается по resolution_date, а не по «сегодня». "
+    "Терминальные статусы (Done, Готово, Closed…) в timeline не показываются — "
+    "задача уже закрыта, это не время работы. "
     "Donut — топ статусов по суммарным дням; редкие объединены в «Ещё N статусов». "
     "Детализация — список закрытых задач от самой длинной к короткой; "
     "внутри каждой — хронологический timeline: Backlog 5 дн. · К выполнению 10 дн. · …"
@@ -1220,6 +1223,21 @@ def _flow_bucket_for_status(issue: dict[str, Any], status: str) -> str:
     return ""
 
 
+def _is_terminal_flow_status(issue: dict[str, Any], status: str) -> bool:
+    if _flow_bucket_for_status(issue, status) == "done":
+        return True
+    normalized = status.strip().lower()
+    return normalized in _DONE_STATUS_NAMES
+
+
+def _issue_work_status_durations_map(issue: dict[str, Any]) -> dict[str, float]:
+    return {
+        status: days
+        for status, days in _issue_status_durations_map(issue).items()
+        if not _is_terminal_flow_status(issue, status)
+    }
+
+
 def _issue_status_timeline_steps(issue: dict[str, Any]) -> list[tuple[str, float]]:
     """Chronological status steps from changelog segments (entered_at order)."""
     segments = issue.get("status_segments")
@@ -1230,12 +1248,14 @@ def _issue_status_timeline_steps(issue: dict[str, Any]) -> list[tuple[str, float
                 continue
             status = str(segment.get("status") or "").strip()
             days = segment.get("duration_days")
-            if not status or not isinstance(days, (int, float)) or days < _STATUS_TIME_MIN_DAYS:
+            if not status or _is_terminal_flow_status(issue, status):
+                continue
+            if not isinstance(days, (int, float)) or days < _STATUS_TIME_MIN_DAYS:
                 continue
             steps.append((status, round(float(days), 1)))
         if steps:
             return steps
-    durations = _status_durations(issue)
+    durations = _issue_work_status_durations_map(issue)
     return [(status, round(days, 1)) for status, days in durations.items() if days >= _STATUS_TIME_MIN_DAYS]
 
 
@@ -1247,7 +1267,7 @@ def _issue_status_timeline_text(issue: dict[str, Any]) -> str:
 
 
 def _issue_total_status_days(issue: dict[str, Any]) -> float:
-    return round(sum(_issue_status_durations_map(issue).values()), 1)
+    return round(sum(_issue_work_status_durations_map(issue).values()), 1)
 
 
 def _build_status_time_chart(
@@ -1262,7 +1282,7 @@ def _build_status_time_chart(
         key = str(issue.get("key") or "")
         summary = str(issue.get("summary") or "")
         issue_url = _issue_browse_url(issue, browse_base=browse_base) or None
-        durations = _issue_status_durations_map(issue)
+        durations = _issue_work_status_durations_map(issue)
         total_days = _issue_total_status_days(issue)
         timeline = _issue_status_timeline_text(issue)
 

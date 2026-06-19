@@ -349,7 +349,40 @@ def test_status_time_chart_groups_by_jira_status():
     items = chart["detail_segments"][0]["items"]
     assert len(items) == 1
     assert items[0]["issue_key"] == "FLEX-10"
-    assert items[0]["metric_value"] == "13.0 дн."
+    assert items[0]["metric_value"] == "11.0 дн."
+
+
+def test_status_time_detail_excludes_terminal_done_status():
+    now = datetime(2026, 6, 19, 12, 0, tzinfo=timezone.utc)
+    snapshot = _snapshot(
+        (
+            "plan",
+            "parent=FLEX-2861",
+            [
+                _issue(
+                    "FLEX-12",
+                    status="Done",
+                    category="done",
+                    start_date="2026-06-01",
+                    resolution_date="2026-06-10",
+                ),
+            ],
+        ),
+    )
+    issue = snapshot["sections"][0]["issues"][0]
+    issue["status_segments"] = [
+        {"status": "In Progress", "duration_days": 4.0, "entered_at": "2026-05-01T10:00:00+00:00"},
+        {"status": "Done", "duration_days": 16.2, "entered_at": "2026-06-03T10:00:00+00:00"},
+    ]
+    issue["status_flow_bucket_map"] = {"In Progress": "dev", "Done": "done"}
+
+    result = compute_scope_flow_pace(snapshot, team_slug="igaming-rip", now=now)
+    chart = next(item for item in result["charts"]["donuts"] if item["id"] == "phase_time")
+    item = chart["detail_segments"][0]["items"][0]
+    assert item["issue_key"] == "FLEX-12"
+    assert "Done" not in item["detail"]
+    assert item["detail"] == "In Progress 4.0 дн."
+    assert item["metric_value"] == "4.0 дн."
 
 
 def test_status_time_detail_shows_chronological_timeline():
