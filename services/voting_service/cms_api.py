@@ -1825,7 +1825,8 @@ async def _put_jira_issue_significance(issue_key: str, significance: int) -> boo
         await client.close()
 
 
-async def _sync_queue_significance_to_jira(order: list[str]) -> None:
+async def _sync_queue_significance_to_jira(order: list[str], *, moved_key: Optional[str] = None) -> list[str]:
+    """Best-effort Jira sync; returns issue keys that could not be updated."""
     positions = queue_significance_positions(order)
     failures: list[str] = []
     for issue_key, significance in positions.items():
@@ -1841,12 +1842,20 @@ async def _sync_queue_significance_to_jira(order: list[str]) -> None:
             failures.append(issue_key)
             continue
         if not saved:
+            logger.warning(
+                "scope queue significance Jira update rejected key=%s significance=%s",
+                issue_key,
+                significance,
+            )
             failures.append(issue_key)
     if failures:
-        raise HTTPException(
-            status_code=502,
-            detail="Порядок сохранён, но значимость не записана в Jira",
+        logger.warning(
+            "scope queue significance partial sync moved_key=%s failed_count=%s failed_keys=%s",
+            moved_key,
+            len(failures),
+            failures[:10],
         )
+    return failures
 
 
 def _scope_snapshot_has_issue(snapshot: dict[str, Any], issue_key: str) -> bool:
@@ -2993,7 +3002,10 @@ async def cms_reorder_scope_priority_queue(
     board = await _get_cms_store(request).save_scope_board_snapshot(board_id, next_snapshot)
     if not board:
         raise HTTPException(status_code=404, detail="Scope board not found")
-    await _sync_queue_significance_to_jira(list(next_queue.get("order") or []))
+    significance_failures = await _sync_queue_significance_to_jira(
+        list(next_queue.get("order") or []),
+        moved_key=str(moved_key) if moved_key else None,
+    )
     if moved_key and jira_comment:
         try:
             await _post_jira_issue_comment(str(moved_key), jira_comment)
@@ -3012,7 +3024,12 @@ async def cms_reorder_scope_priority_queue(
         "cms.scope_board.queue_reorder",
         actor.username,
         "ok",
-        {"board_id": board_id, "queue": kind, "issue_key": moved_key},
+        {
+            "board_id": board_id,
+            "queue": kind,
+            "issue_key": moved_key,
+            "significance_failures": significance_failures[:20],
+        },
     )
     return board
 
