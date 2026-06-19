@@ -318,6 +318,7 @@ class JiraServiceHttpClient(JiraClient):
                     "checklist_progress": issue.get("checklist_progress"),
                     "status_durations": issue.get("status_durations") or {},
                     "status_bucket_durations": issue.get("status_bucket_durations") or {},
+                    "status_flow_bucket_map": issue.get("status_flow_bucket_map") or {},
                     "status_segments": issue.get("status_segments") or [],
                     "current_status_assignee": issue.get("current_status_assignee"),
                     "current_status_days": issue.get("current_status_days"),

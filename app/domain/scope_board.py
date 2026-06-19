@@ -181,6 +181,7 @@ def normalize_scope_issue(raw: dict[str, Any]) -> dict[str, Any]:
         "checklist_progress": raw.get("checklist_progress") if isinstance(raw.get("checklist_progress"), (int, float)) else None,
         "status_durations": raw.get("status_durations") if isinstance(raw.get("status_durations"), dict) else {},
         "status_bucket_durations": raw.get("status_bucket_durations") if isinstance(raw.get("status_bucket_durations"), dict) else {},
+        "status_flow_bucket_map": raw.get("status_flow_bucket_map") if isinstance(raw.get("status_flow_bucket_map"), dict) else {},
         "status_segments": raw.get("status_segments") if isinstance(raw.get("status_segments"), list) else [],
         "current_status_assignee": str(raw.get("current_status_assignee") or ""),
         "current_status_days": raw.get("current_status_days"),

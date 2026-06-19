@@ -333,11 +333,43 @@ def test_phase_time_chart_has_only_work_phases():
     segment_keys = {segment["key"] for segment in phase["segments"]}
     assert segment_keys == {"dev", "test", "pause"}
     assert phase["segments"][0]["value"] == 3.0
-    assert "прочее" not in phase["methodology"].lower()
     assert "Не фазы" in phase["methodology"]
     detail_keys = {segment["key"] for segment in phase["detail_segments"]}
     assert detail_keys == {"dev", "test", "pause"}
     assert all("Прочее" not in item.get("metric_label", "") for segment in phase["detail_segments"] for item in segment["items"])
+
+
+def test_phase_detail_includes_status_breakdown():
+    now = datetime(2026, 6, 19, 12, 0, tzinfo=timezone.utc)
+    snapshot = _snapshot(
+        (
+            "plan",
+            "parent=FLEX-2861",
+            [
+                _issue(
+                    "FLEX-11",
+                    status="Готово",
+                    category="done",
+                    start_date="2026-06-01",
+                    resolution_date="2026-06-10",
+                ),
+            ],
+        ),
+    )
+    issue = snapshot["sections"][0]["issues"][0]
+    issue["status_bucket_durations"] = {"dev": 5.0, "test": 3.0, "pause": 0.0, "todo": 2.0}
+    issue["status_durations"] = {"В работе": 5.0, "Тестирование": 3.0, "К выполнению": 2.0}
+    issue["status_flow_bucket_map"] = {
+        "В работе": "dev",
+        "Тестирование": "test",
+        "К выполнению": "todo",
+    }
+
+    result = compute_scope_flow_pace(snapshot, team_slug="igaming-rip", now=now)
+    phase = next(item for item in result["charts"]["donuts"] if item["id"] == "phase_time")
+    dev_segment = next(segment for segment in phase["detail_segments"] if segment["key"] == "dev")
+    assert "В работе 5.0д" in dev_segment["items"][0]["detail"]
+    assert "Не фазы: К выполнению 2.0д" in dev_segment["items"][0]["detail"]
     now = datetime(2026, 6, 19, 12, 0, tzinfo=timezone.utc)
     snapshot = _snapshot(
         (

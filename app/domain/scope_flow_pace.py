@@ -47,11 +47,16 @@ FLOW_PACE_TEAM_PROFILE = {
 
 PHASE_TIME_METHODOLOGY = (
     "Сумма дней в трёх рабочих фазах по Jira changelog (status_bucket_durations), только закрытые задачи. "
-    "Dev — разработка: in progress, разработ, в работе и другие dev-статусы (JIRA_DEV_STATUS_KEYWORDS), "
-    "кроме test/pause. Test/Release — test, qa, тестирование, к тестированию, к релизу. "
-    "Пауза — pause, on hold, blocked, пауз, блок. "
-    "Не фазы (в donut не входят): backlog/todo/open, Готово/done и прочие нераспознанные статусы. "
-    "Задача может быть в нескольких сегментах детализации, если провела время в разных фазах."
+    "Dev — разработка и ревью: В работе, In Progress, In Development, Ревью, Code Review, Review, "
+    "Ready for Dev, Reopened (+ JIRA_FLOW_DEV_STATUS_KEYWORDS). "
+    "Test/Release — QA и релиз: Тестирование, К тестированию, К релизу, Ready for Test, In Test, QA, UAT, "
+    "Acceptance, Ready for Release (+ JIRA_FLOW_TEST_STATUS_KEYWORDS). "
+    "Пауза — Пауза, Pause, On Hold, Blocked, Deferred (+ pause/blocked/пауз/блок в названии). "
+    "Не фазы (в donut не входят): очередь — Backlog, К выполнению, To Do, Open; "
+    "закрыто — Готово, Done, Closed, Resolved, Cancelled. "
+    "Любой другой активный статус → Dev (не «прочее»). "
+    "Задача может быть в нескольких сегментах детализации, если провела время в разных фазах. "
+    "В детализации — разбивка по статусам Jira (status_durations → bucket)."
 )
 
 _THROUGHPUT_WINDOW_DAYS = 7
@@ -709,6 +714,40 @@ def _bucket_durations(issue: dict[str, Any]) -> dict[str, float]:
     return {}
 
 
+def _phase_status_breakdown(issue: dict[str, Any]) -> str:
+    """Per-status Jira breakdown grouped by flow phase bucket."""
+    durations = _status_durations(issue)
+    if not durations:
+        buckets = _bucket_durations(issue)
+        return (
+            f"Dev {float(buckets.get('dev') or 0):.1f} · "
+            f"Test {float(buckets.get('test') or 0):.1f} · "
+            f"Pause {float(buckets.get('pause') or 0):.1f} дн."
+        )
+
+    bucket_map = issue.get("status_flow_bucket_map")
+    if not isinstance(bucket_map, dict):
+        bucket_map = {}
+
+    grouped: dict[str, list[str]] = {"dev": [], "test": [], "pause": [], "todo": [], "done": []}
+    for status, days in sorted(durations.items(), key=lambda item: (-item[1], item[0])):
+        if not isinstance(days, (int, float)) or days < 0.05:
+            continue
+        bucket = str(bucket_map.get(status) or "").strip().lower()
+        if bucket not in grouped:
+            bucket = "dev"
+        grouped[bucket].append(f"{status} {days:.1f}д")
+
+    parts: list[str] = []
+    for bucket, label in (("dev", "Dev"), ("test", "Test"), ("pause", "Pause")):
+        if grouped[bucket]:
+            parts.append(f"{label}: {', '.join(grouped[bucket])}")
+    non_phase = grouped["todo"] + grouped["done"]
+    if non_phase:
+        parts.append(f"Не фазы: {', '.join(non_phase)}")
+    return " · ".join(parts) if parts else "Нет разбивки по статусам."
+
+
 def _status_durations(issue: dict[str, Any]) -> dict[str, float]:
     raw = issue.get("status_durations")
     if isinstance(raw, dict):
@@ -1315,7 +1354,7 @@ def _compute_flow_pace_charts(
         dev_days = float(buckets.get("dev") or 0.0)
         test_days = float(buckets.get("test") or 0.0)
         pause_days = float(buckets.get("pause") or 0.0)
-        phase_detail = f"Dev {dev_days:.1f} · Test {test_days:.1f} · Pause {pause_days:.1f} дн."
+        phase_detail = _phase_status_breakdown(issue)
         if dev_days > 0:
             phase_items.append(
                 _chart_detail_item(
