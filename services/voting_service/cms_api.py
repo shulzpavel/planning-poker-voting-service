@@ -1930,6 +1930,38 @@ async def _clear_queue_significance_in_jira(issue_keys: list[str]) -> list[str]:
     return failures
 
 
+def _scope_board_mutation_response(board: dict[str, Any], *, snapshot_keys: list[str]) -> dict[str, Any]:
+    """Return a lightweight board payload for snapshot mutations (client merges via snapshot_partial)."""
+    if not board:
+        return board
+    snapshot = board.get("snapshot") or {}
+    patch = {key: snapshot[key] for key in snapshot_keys if key in snapshot}
+    return {
+        **board,
+        "snapshot": patch,
+        "snapshot_partial": True,
+        "ai_summary": None,
+        "ai_summary_history": [],
+    }
+
+
+def _scope_board_metadata_response(board: dict[str, Any]) -> dict[str, Any]:
+    """Return board metadata without snapshot/AI payloads."""
+    if not board:
+        return board
+    return {
+        **board,
+        "snapshot": None,
+        "snapshot_partial": True,
+        "ai_summary": None,
+        "ai_summary_history": [],
+    }
+
+
+def _snapshot_shallow_copy(snapshot: dict[str, Any] | None) -> dict[str, Any]:
+    return dict(snapshot or {})
+
+
 def _scope_snapshot_has_issue(snapshot: dict[str, Any], issue_key: str) -> bool:
     target = issue_key.upper()
     for section in snapshot.get("sections") or []:
@@ -1944,7 +1976,7 @@ def _scope_snapshot_has_issue(snapshot: dict[str, Any], issue_key: str) -> bool:
 
 
 def _scope_snapshot_with_due_date(snapshot: dict[str, Any], *, issue_key: str, due_date: str) -> dict[str, Any]:
-    updated = copy.deepcopy(snapshot or {})
+    updated = _snapshot_shallow_copy(snapshot)
     target = issue_key.upper()
 
     for section in updated.get("sections") or []:
@@ -2062,7 +2094,7 @@ def _scope_snapshot_with_report_comment(
     actor_name: str,
     commented_at: str,
 ) -> dict[str, Any]:
-    updated = copy.deepcopy(snapshot or {})
+    updated = _snapshot_shallow_copy(snapshot)
     comments = _scope_report_comments(updated)
     target = issue_key.upper()
     canonical_key = next((key for key in comments if key.upper() == target), issue_key.upper())
@@ -2096,7 +2128,7 @@ def _scope_snapshot_with_manual_question(
     actor_name: str,
     created_at: str,
 ) -> dict[str, Any]:
-    updated = copy.deepcopy(snapshot or {})
+    updated = _snapshot_shallow_copy(snapshot)
     manual = list(updated.get("manual_questions") or [])
     manual.append(
         {
@@ -2117,7 +2149,7 @@ def _scope_snapshot_with_top_item(
     actor_name: str,
     created_at: str,
 ) -> dict[str, Any]:
-    updated = copy.deepcopy(snapshot or {})
+    updated = _snapshot_shallow_copy(snapshot)
     top_items = list(updated.get("top_items") or [])
     if len(top_items) >= 10:
         raise HTTPException(status_code=400, detail="Можно добавить не более 10 пунктов")
@@ -2134,7 +2166,7 @@ def _scope_snapshot_with_top_item(
 
 
 def _scope_snapshot_without_top_item(snapshot: dict[str, Any], *, item_id: str) -> dict[str, Any]:
-    updated = copy.deepcopy(snapshot or {})
+    updated = _snapshot_shallow_copy(snapshot)
     target = item_id.strip()
     top_items = [
         item
@@ -2154,7 +2186,7 @@ def _scope_snapshot_with_todo_item(
     actor_name: str,
     created_at: str,
 ) -> dict[str, Any]:
-    updated = copy.deepcopy(snapshot or {})
+    updated = _snapshot_shallow_copy(snapshot)
     todo_items = list(updated.get("todo_items") or [])
     if len(todo_items) >= 100:
         raise HTTPException(status_code=400, detail="Можно добавить не более 100 todo")
@@ -2180,7 +2212,7 @@ def _scope_snapshot_with_todo_done(
     actor_name: str,
     changed_at: str,
 ) -> dict[str, Any]:
-    updated = copy.deepcopy(snapshot or {})
+    updated = _snapshot_shallow_copy(snapshot)
     target = item_id.strip()
     changed = False
     todo_items: list[dict[str, Any]] = []
@@ -2204,7 +2236,7 @@ def _scope_snapshot_with_todo_done(
 
 
 def _scope_snapshot_without_todo_item(snapshot: dict[str, Any], *, item_id: str) -> dict[str, Any]:
-    updated = copy.deepcopy(snapshot or {})
+    updated = _snapshot_shallow_copy(snapshot)
     target = item_id.strip()
     todo_items = [
         item
@@ -2225,7 +2257,7 @@ def _scope_snapshot_with_resolved_question(
     actor_name: str,
     resolved_at: str,
 ) -> dict[str, Any]:
-    updated = copy.deepcopy(snapshot or {})
+    updated = _snapshot_shallow_copy(snapshot)
     target = _scope_question_id(question_id)
     manual = []
     resolved_source: Optional[dict[str, Any]] = None
@@ -2374,6 +2406,22 @@ async def cms_get_scope_board(
     return board
 
 
+@cms_router.get("/cms/scope-boards/{board_id}/ai-summary/jira-export")
+async def cms_get_scope_board_ai_jira_export(
+    board_id: int,
+    request: Request,
+    actor: CmsPrincipal = Depends(require_permission(PERM_PLANNER_VIEW)),
+) -> dict:
+    existing = await _get_cms_store(request).get_scope_board(board_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Scope board not found")
+    assert_record_access(actor, existing)
+    payload = await _get_cms_store(request).get_scope_board_ai_jira_export(board_id)
+    if payload is None:
+        raise HTTPException(status_code=404, detail="Scope board not found")
+    return payload
+
+
 @cms_router.patch("/cms/scope-boards/{board_id}/layout")
 @cms_router.patch("/cms/scope-boards/{board_id}/layout/")
 async def cms_update_scope_board_layout(
@@ -2401,7 +2449,7 @@ async def cms_update_scope_board_layout(
         "ok",
         {"board_id": board_id},
     )
-    return board
+    return _scope_board_metadata_response(board)
 
 
 @cms_router.patch("/cms/scope-boards/{board_id}/flow-pace-chart-order")
@@ -2431,7 +2479,7 @@ async def cms_update_scope_board_flow_pace_chart_order(
         "ok",
         {"board_id": board_id},
     )
-    return board
+    return _scope_board_metadata_response(board)
 
 
 @cms_router.patch("/cms/scope-boards/{board_id}/release-comments")
@@ -2463,7 +2511,7 @@ async def cms_update_scope_board_release_comments(
         "ok",
         {"board_id": board_id},
     )
-    return board
+    return _scope_board_metadata_response(board)
 
 
 @cms_router.patch("/cms/scope-boards/{board_id}")
@@ -2563,7 +2611,7 @@ async def cms_refresh_scope_board(
                     client,
                     force_refresh=True,
                     milestone_status_targets=priority_queue_milestone_targets("todo"),
-                    enrich_changelog=True,
+                    enrich_changelog=False,
                 )
             )
         if (existing.get("test_jql") or "").strip():
@@ -2573,7 +2621,7 @@ async def cms_refresh_scope_board(
                     client,
                     force_refresh=True,
                     milestone_status_targets=priority_queue_milestone_targets("test"),
-                    enrich_changelog=True,
+                    enrich_changelog=False,
                 )
             )
         release_outcomes = {}
@@ -2759,7 +2807,10 @@ async def cms_add_scope_issue_comment(
         "ok",
         {"board_id": board_id, "issue_key": issue_key},
     )
-    return board
+    return _scope_board_mutation_response(
+        board,
+        snapshot_keys=["sections", "plan_issues", "unplan_issues", "report"],
+    )
 
 
 @cms_router.put("/cms/scope-boards/{board_id}/issues/{issue_key}/report-comment")
@@ -2798,7 +2849,7 @@ async def cms_update_scope_report_comment(
         "ok",
         {"board_id": board_id, "issue_key": issue_key},
     )
-    return board
+    return _scope_board_mutation_response(board, snapshot_keys=["report_comments"])
 
 
 @cms_router.post("/cms/scope-boards/{board_id}/questions")
@@ -2836,7 +2887,7 @@ async def cms_add_scope_manual_question(
         "ok",
         {"board_id": board_id},
     )
-    return board
+    return _scope_board_mutation_response(board, snapshot_keys=["manual_questions"])
 
 
 @cms_router.post("/cms/scope-boards/{board_id}/top-items")
@@ -2874,7 +2925,7 @@ async def cms_add_scope_top_item(
         "ok",
         {"board_id": board_id},
     )
-    return board
+    return _scope_board_mutation_response(board, snapshot_keys=["top_items"])
 
 
 @cms_router.delete("/cms/scope-boards/{board_id}/top-items/{item_id}")
@@ -2901,7 +2952,7 @@ async def cms_delete_scope_top_item(
         "ok",
         {"board_id": board_id, "item_id": item_id},
     )
-    return board
+    return _scope_board_mutation_response(board, snapshot_keys=["top_items"])
 
 
 @cms_router.post("/cms/scope-boards/{board_id}/todo-items")
@@ -2939,7 +2990,7 @@ async def cms_add_scope_todo_item(
         "ok",
         {"board_id": board_id},
     )
-    return board
+    return _scope_board_mutation_response(board, snapshot_keys=["todo_items"])
 
 
 @cms_router.patch("/cms/scope-boards/{board_id}/todo-items/{item_id}")
@@ -2974,7 +3025,7 @@ async def cms_update_scope_todo_item(
         "ok",
         {"board_id": board_id, "item_id": item_id, "done": body.done},
     )
-    return board
+    return _scope_board_mutation_response(board, snapshot_keys=["todo_items"])
 
 
 @cms_router.delete("/cms/scope-boards/{board_id}/todo-items/{item_id}")
@@ -3001,7 +3052,7 @@ async def cms_delete_scope_todo_item(
         "ok",
         {"board_id": board_id, "item_id": item_id},
     )
-    return board
+    return _scope_board_mutation_response(board, snapshot_keys=["todo_items"])
 
 
 @cms_router.post("/cms/scope-boards/{board_id}/questions/{question_id}/resolve")
@@ -3043,7 +3094,10 @@ async def cms_resolve_scope_question(
         "ok",
         {"board_id": board_id, "question_id": question_id},
     )
-    return board
+    return _scope_board_mutation_response(
+        board,
+        snapshot_keys=["manual_questions", "resolved_questions", "report"],
+    )
 
 
 def _parse_priority_queue_kind(raw: str) -> str:
@@ -3106,7 +3160,7 @@ async def cms_reorder_scope_priority_queue(
             moved_to=moved_to if isinstance(moved_to, int) else None,
         )
 
-    next_snapshot = copy.deepcopy(snapshot)
+    next_snapshot = _snapshot_shallow_copy(snapshot)
     next_queues = dict(next_snapshot.get("priority_queues") or {})
     next_queues[kind] = next_queue
     next_snapshot["priority_queues"] = next_queues
@@ -3147,7 +3201,7 @@ async def cms_reorder_scope_priority_queue(
             "significance_failures": significance_failures[:20],
         },
     )
-    return board
+    return _scope_board_mutation_response(board, snapshot_keys=["priority_queues"])
 
 
 @cms_router.post("/cms/scope-boards/{board_id}/queues/{queue_kind}/reset-ranked")
@@ -3168,7 +3222,7 @@ async def cms_reset_scope_priority_queue_ranked(
     current_queue = queues.get(kind) or {"ranked_order": [], "issues": [], "history": []}
     next_queue, keys_to_clear = clear_priority_queue_ranked(current_queue)
 
-    next_snapshot = copy.deepcopy(snapshot)
+    next_snapshot = _snapshot_shallow_copy(snapshot)
     next_queues = dict(next_snapshot.get("priority_queues") or {})
     next_queues[kind] = next_queue
     next_snapshot["priority_queues"] = next_queues
@@ -3192,7 +3246,7 @@ async def cms_reset_scope_priority_queue_ranked(
             "significance_failures": significance_failures[:20],
         },
     )
-    return board
+    return _scope_board_mutation_response(board, snapshot_keys=["priority_queues"])
 
 
 @cms_router.post("/cms/scope-boards/{board_id}/queues/{queue_kind}/issues/{issue_key}/comment")
@@ -3235,7 +3289,7 @@ async def cms_add_scope_queue_issue_comment(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    next_snapshot = copy.deepcopy(snapshot)
+    next_snapshot = _snapshot_shallow_copy(snapshot)
     next_queues = dict(next_snapshot.get("priority_queues") or {})
     next_queues[kind] = next_queue
     next_snapshot["priority_queues"] = next_queues
@@ -3257,7 +3311,7 @@ async def cms_add_scope_queue_issue_comment(
         "ok",
         {"board_id": board_id, "queue": kind, "issue_key": issue_key},
     )
-    return board
+    return _scope_board_mutation_response(board, snapshot_keys=["priority_queues"])
 
 
 @cms_router.put("/cms/scope-boards/{board_id}/queues/{queue_kind}/issues/{issue_key}/due-date")
@@ -3303,7 +3357,10 @@ async def cms_update_scope_queue_issue_due_date(
         "ok",
         {"board_id": board_id, "queue": kind, "issue_key": issue_key, "due_date": body.due_date},
     )
-    return board
+    return _scope_board_mutation_response(
+        board,
+        snapshot_keys=["priority_queues", "sections", "plan_issues", "unplan_issues"],
+    )
 
 
 @cms_router.post("/cms/scope-boards/{board_id}/analyze")

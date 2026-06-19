@@ -2405,6 +2405,25 @@ class PostgresCmsStore:
             return None
         return await self.get_scope_board(board_id)
 
+    async def get_scope_board_ai_jira_export(self, board_id: int) -> Optional[dict[str, Any]]:
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT ai_summary->'jira_export' AS jira_export,
+                       ai_summary->>'health' AS health
+                FROM cms_scope_boards
+                WHERE id = $1
+                """,
+                board_id,
+            )
+        if not row:
+            return None
+        jira_export = _decode_jsonb(row["jira_export"]) if row["jira_export"] is not None else None
+        return {
+            "jira_export": jira_export if isinstance(jira_export, dict) else None,
+            "health": row["health"],
+        }
+
     async def merge_scope_board_ai_summary_jira_export(
         self,
         board_id: int,
