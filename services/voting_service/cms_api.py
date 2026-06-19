@@ -62,6 +62,7 @@ from app.usecases.manage_tasks import (
     TaskQueueError,
     UpdateTaskUseCase,
 )
+from services.voting_service.cms_auth import build_cms_token_payload
 from services.voting_service.cms_store import DEFAULT_LIMIT, MAX_LIMIT, token_hash as compute_token_hash
 from services.voting_service.session_finish_notify import maybe_notify_session_finished
 from services.voting_service.cms_team_access import (
@@ -492,10 +493,17 @@ async def cms_login(body: LoginRequest, request: Request, response: Response) ->
 
     await redis_client.delete(fail_key)
     token = secrets.token_urlsafe(32)
+    token_payload = build_cms_token_payload(
+        admin_id=int(principal_record["id"]),
+        username=principal_record["username"],
+        ip=ip,
+        token_version=int(principal_record.get("token_version", 1)),
+        ttl_seconds=CMS_TOKEN_TTL,
+    )
     await redis_client.setex(
         f"cms_token:{token}",
         CMS_TOKEN_TTL,
-        json.dumps({"admin_id": principal_record["id"], "username": principal_record["username"], "ip": ip}),
+        json.dumps(token_payload),
     )
     response.set_cookie(
         CMS_COOKIE_NAME,
