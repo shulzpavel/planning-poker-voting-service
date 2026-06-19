@@ -44,6 +44,13 @@ def assert_record_access(actor: CmsPrincipal, record: dict[str, Any]) -> None:
         raise HTTPException(status_code=404, detail="Not found")
 
 
+def assert_user_sessions_access(actor: CmsPrincipal, team_ids: list[Optional[int]]) -> None:
+    """Check team access for a participant linked to one or more sessions."""
+    for team_id in team_ids:
+        if not can_access_team(actor, team_id):
+            raise HTTPException(status_code=404, detail="Not found")
+
+
 def resolve_create_team_id(actor: CmsPrincipal, team_id: Optional[int]) -> Optional[int]:
     """Resolve team_id for resource creation.
 

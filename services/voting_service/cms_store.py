@@ -2919,6 +2919,61 @@ class PostgresCmsStore:
             row["title"],
         )
 
+    async def get_web_token(self, token_id: int) -> Optional[dict[str, Any]]:
+        """Load a web invite token and the parent session's team_id."""
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT wt.id, wt.token_hash, wt.token_prefix, wt.chat_id, wt.topic_id,
+                       wt.session_key, wt.expires_at > NOW() AS is_active, s.team_id
+                FROM cms_web_tokens wt
+                LEFT JOIN cms_sessions s
+                  ON s.chat_id = wt.chat_id
+                 AND s.topic_id IS NOT DISTINCT FROM wt.topic_id
+                 AND s.deleted_at IS NULL
+                WHERE wt.id = $1
+                """,
+                token_id,
+            )
+        if not row:
+            return None
+        data = dict(row)
+        team_id = data.get("team_id")
+        data["team_id"] = int(team_id) if team_id is not None else None
+        return data
+
+    async def get_user_session_team_ids(self, user_id: int) -> list[Optional[int]]:
+        """Distinct team_ids for sessions a participant touched in the CMS read model."""
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT DISTINCT s.team_id
+                FROM cms_sessions s
+                WHERE s.deleted_at IS NULL
+                  AND (
+                    EXISTS (
+                        SELECT 1
+                        FROM cms_session_participants sp
+                        WHERE sp.session_id = s.id AND sp.user_id = $1
+                    )
+                    OR EXISTS (
+                        SELECT 1
+                        FROM cms_votes v
+                        WHERE v.session_id = s.id AND v.user_id = $1
+                    )
+                    OR EXISTS (
+                        SELECT 1
+                        FROM cms_web_participants wp
+                        WHERE wp.user_id = $1
+                          AND wp.chat_id = s.chat_id
+                          AND wp.topic_id IS NOT DISTINCT FROM s.topic_id
+                    )
+                  )
+                """,
+                user_id,
+            )
+        return [int(row["team_id"]) if row["team_id"] is not None else None for row in rows]
+
     async def revoke_web_token(self, token_id: int) -> Optional[str]:
         """Force-expire a web invite token. Returns the token_hash so the
         caller can also wipe the Redis ``web:<token>`` key when known."""

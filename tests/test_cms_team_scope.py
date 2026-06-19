@@ -3,6 +3,7 @@
 from services.voting_service._http_shared import CmsPrincipal, _principal_from_record
 from services.voting_service.cms_team_access import (
     assert_record_access,
+    assert_user_sessions_access,
     can_access_team,
     resolve_create_team_id,
     team_scope,
@@ -54,6 +55,14 @@ def test_team_admin_cannot_access_foreign_team():
     assert can_access_team(actor, 2) is False
     with pytest.raises(HTTPException) as exc:
         assert_record_access(actor, {"team_id": 2})
+    assert exc.value.status_code == 404
+
+
+def test_user_sessions_access_requires_all_linked_teams():
+    actor = _actor(team_ids=(1,))
+    assert_user_sessions_access(actor, [1, None]) is None
+    with pytest.raises(HTTPException) as exc:
+        assert_user_sessions_access(actor, [1, 2])
     assert exc.value.status_code == 404
 
 
