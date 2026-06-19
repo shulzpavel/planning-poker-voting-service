@@ -66,6 +66,7 @@ from services.voting_service.cms_store import DEFAULT_LIMIT, MAX_LIMIT, token_ha
 from services.voting_service.session_finish_notify import maybe_notify_session_finished
 from services.voting_service.cms_team_access import (
     assert_record_access,
+    assert_user_sessions_access,
     require_superuser,
     resolve_create_team_id,
     team_scope,
@@ -1119,6 +1120,11 @@ async def cms_revoke_token(
     scan Redis once and drop the matching ``web:`` key by comparing hashes.
     """
     store = _get_cms_store(request)
+    token = await store.get_web_token(token_id)
+    if not token or not token.get("is_active"):
+        raise HTTPException(status_code=404, detail="Token not found or already expired")
+    assert_record_access(actor, token)
+
     revoked_hash = await store.revoke_web_token(token_id)
     if not revoked_hash:
         raise HTTPException(status_code=404, detail="Token not found or already expired")
@@ -1172,6 +1178,11 @@ async def cms_hard_delete_user(
         user_id = int(raw_user_id.strip())
     except ValueError as exc:
         raise HTTPException(status_code=400, detail="Invalid participant id") from exc
+
+    team_ids = await store.get_user_session_team_ids(user_id)
+    if team_ids:
+        assert_user_sessions_access(actor, team_ids)
+
     try:
         deleted = await store.hard_delete_user(user_id, body.confirm_name)
     except ValueError as exc:
