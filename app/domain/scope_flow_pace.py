@@ -49,9 +49,8 @@ STATUS_TIME_METHODOLOGY = (
     "Сумма дней нахождения закрытых задач в каждом статусе Jira по changelog (status_durations). "
     "Каждый переход фиксирует интервал entered→left; текущий статус — до resolution или «сейчас». "
     "Donut — топ статусов по суммарным дням; редкие объединены в «Ещё N статусов». "
-    "Детализация — полный список: по каждому статусу все задачи с днями, долей от timeline задачи "
-    "и справочной группой (Dev / Test / Пауза / Очередь / Закрыто). "
-    "Одна задача может быть в нескольких группах детализации."
+    "Детализация — хронологический timeline задачи по changelog: "
+    "Backlog 5 дн. · К выполнению 10 дн. · В работе 2 дн. …"
 )
 
 _STATUS_TIME_DONUT_TOP = 8
@@ -1221,16 +1220,30 @@ def _flow_bucket_for_status(issue: dict[str, Any], status: str) -> str:
     return ""
 
 
+def _issue_status_timeline_steps(issue: dict[str, Any]) -> list[tuple[str, float]]:
+    """Chronological status steps from changelog segments (entered_at order)."""
+    segments = issue.get("status_segments")
+    if isinstance(segments, list) and segments:
+        steps: list[tuple[str, float]] = []
+        for segment in segments:
+            if not isinstance(segment, dict):
+                continue
+            status = str(segment.get("status") or "").strip()
+            days = segment.get("duration_days")
+            if not status or not isinstance(days, (int, float)) or days < _STATUS_TIME_MIN_DAYS:
+                continue
+            steps.append((status, round(float(days), 1)))
+        if steps:
+            return steps
+    durations = _status_durations(issue)
+    return [(status, round(days, 1)) for status, days in durations.items() if days >= _STATUS_TIME_MIN_DAYS]
+
+
 def _issue_status_timeline_text(issue: dict[str, Any]) -> str:
-    durations = _issue_status_durations_map(issue)
-    if not durations:
+    steps = _issue_status_timeline_steps(issue)
+    if not steps:
         return "—"
-    parts = [
-        f"{status} {days:.1f}д"
-        for status, days in sorted(durations.items(), key=lambda item: (-item[1], item[0]))
-        if days >= _STATUS_TIME_MIN_DAYS
-    ]
-    return " → ".join(parts) if parts else "—"
+    return " · ".join(f"{status} {days:.1f} дн." for status, days in steps)
 
 
 def _build_status_time_chart(
@@ -1248,7 +1261,6 @@ def _build_status_time_chart(
         summary = str(issue.get("summary") or "")
         issue_url = _issue_browse_url(issue, browse_base=browse_base) or None
         durations = _issue_status_durations_map(issue)
-        issue_total = sum(durations.values())
         timeline = _issue_status_timeline_text(issue)
 
         for status, days in durations.items():
@@ -1261,12 +1273,6 @@ def _build_status_time_chart(
             if status not in status_bucket_by_name and bucket:
                 status_bucket_by_name[status] = bucket
 
-            share = (days / issue_total * 100.0) if issue_total > 0 else 0.0
-            bucket_label = _FLOW_BUCKET_LABELS.get(bucket, "—")
-            detail = (
-                f"Доля {share:.0f}% от {issue_total:.1f} дн. задачи · группа {bucket_label} · "
-                f"timeline: {timeline}"
-            )
             status_items.append(
                 _chart_detail_item(
                     segment_key=segment_key,
@@ -1274,7 +1280,7 @@ def _build_status_time_chart(
                     summary=summary,
                     metric_label=status,
                     metric_value=f"{days:.1f} дн.",
-                    detail=detail,
+                    detail=timeline,
                     issue_url=issue_url,
                     flow_bucket=bucket,
                 )
@@ -1327,12 +1333,7 @@ def _build_status_time_chart(
 
     detail_segments = _group_detail_segments(status_items, segment_defs)
     for segment in detail_segments:
-        segment["items"].sort(
-            key=lambda item: (
-                -_parse_metric_days(str(item.get("metric_value") or "")),
-                str(item.get("issue_key") or ""),
-            )
-        )
+        segment["items"].sort(key=lambda item: str(item.get("issue_key") or ""))
 
     subtitle = f"{total_days:.0f} дн. суммарно · {len(done_issues)} закрытых"
     if status_count:

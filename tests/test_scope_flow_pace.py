@@ -349,7 +349,7 @@ def test_status_time_chart_groups_by_jira_status():
     assert "v_rabote" in detail_keys or any("работе" in segment["label"] for segment in chart["detail_segments"])
 
 
-def test_status_time_detail_includes_timeline_and_share():
+def test_status_time_detail_shows_chronological_timeline():
     now = datetime(2026, 6, 19, 12, 0, tzinfo=timezone.utc)
     snapshot = _snapshot(
         (
@@ -367,11 +367,18 @@ def test_status_time_detail_includes_timeline_and_share():
         ),
     )
     issue = snapshot["sections"][0]["issues"][0]
-    issue["status_durations"] = {"В работе": 5.0, "Тестирование": 3.0, "К выполнению": 2.0}
+    issue["status_durations"] = {"Backlog": 5.0, "К выполнению": 10.0, "В работе": 2.0, "Тестирование": 3.0}
+    issue["status_segments"] = [
+        {"status": "Backlog", "duration_days": 5.0, "entered_at": "2026-05-01T10:00:00+00:00"},
+        {"status": "К выполнению", "duration_days": 10.0, "entered_at": "2026-05-06T10:00:00+00:00"},
+        {"status": "В работе", "duration_days": 2.0, "entered_at": "2026-05-16T10:00:00+00:00"},
+        {"status": "Тестирование", "duration_days": 3.0, "entered_at": "2026-05-18T10:00:00+00:00"},
+    ]
     issue["status_flow_bucket_map"] = {
+        "Backlog": "todo",
+        "К выполнению": "todo",
         "В работе": "dev",
         "Тестирование": "test",
-        "К выполнению": "todo",
     }
 
     result = compute_scope_flow_pace(snapshot, team_slug="igaming-rip", now=now)
@@ -379,12 +386,39 @@ def test_status_time_detail_includes_timeline_and_share():
     work_segment = next(segment for segment in chart["detail_segments"] if "В работе" in segment["label"])
     item = work_segment["items"][0]
     assert item["issue_key"] == "FLEX-11"
-    assert "Доля" in item["detail"]
-    assert "timeline:" in item["detail"]
+    assert item["detail"] == "Backlog 5.0 дн. · К выполнению 10.0 дн. · В работе 2.0 дн. · Тестирование 3.0 дн."
+    assert "Доля" not in item["detail"]
     assert item["flow_bucket"] == "dev"
 
 
 def test_cycle_time_uses_created_when_start_date_missing():
+    now = datetime(2026, 6, 19, 12, 0, tzinfo=timezone.utc)
+    snapshot = _snapshot(
+        (
+            "plan",
+            "parent=FLEX-2861",
+            [
+                _issue(
+                    "FLEX-2571",
+                    status="Готово",
+                    category="done",
+                    created="2026-04-28",
+                    resolution_date="2026-06-08",
+                    story_points=5,
+                ),
+            ],
+        ),
+    )
+    snapshot["sections"][0]["issues"][0]["status_bucket_durations"] = {"dev": 7.1, "test": 33.9, "pause": 0.93}
+
+    result = compute_scope_flow_pace(snapshot, team_slug="igaming-rip", now=now)
+    cycle = next(item for item in result["charts"]["donuts"] if item["id"] == "cycle_time")
+    assert cycle["center_value"] != "—"
+    assert result["summary"]["median_cycle_days"] is not None
+    assert result["summary"]["median_cycle_days"] >= 40
+
+
+def test_collect_flow_pace_issues_wrapper():
     snapshot = _snapshot(("plan", "parent=FLEX-2861", [_issue("FLEX-1")]))
     assert len(collect_flow_pace_issues(snapshot)) == 1
 
