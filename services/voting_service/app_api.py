@@ -1490,7 +1490,7 @@ async def app_sync_jira_story_points(
     body: JiraStoryPointsSyncBody,
     request: Request,
     topic_id: Optional[int] = Query(None),
-    actor: CmsPrincipal = Depends(require_permission(PERM_APP_SESSIONS_MANAGE)),
+    actor: CmsPrincipal = Depends(_require_manager_session),
 ):
     """Write final SP from the last finished batch into Jira (manager-initiated)."""
     session = await request.app.state.repository.get_session(chat_id, topic_id)
