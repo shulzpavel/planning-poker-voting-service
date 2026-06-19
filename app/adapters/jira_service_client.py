@@ -178,6 +178,17 @@ class JiraServiceHttpClient(JiraClient):
             data = await resp.json()
         return bool(data.get("success")) if isinstance(data, dict) else False
 
+    async def clear_significance(self, issue_key: str) -> bool:
+        """Clear grooming significance via Jira Service."""
+        url = f"{self.base_url}/api/v1/issue/{issue_key}/significance"
+        session = await self._get_session()
+        async with session.delete(url) as resp:
+            if resp.status != 200:
+                body = (await resp.text())[:500]
+                raise RuntimeError(f"Jira Service returned status {resp.status}: {body}")
+            data = await resp.json()
+        return bool(data.get("success")) if isinstance(data, dict) else False
+
     async def add_issue_comment(self, issue_key: str, text: str) -> dict[str, Any]:
         """Append a comment through Jira Service."""
         url = f"{self.base_url}/api/v1/issue/{issue_key}/comment"

@@ -1,4 +1,8 @@
-from app.domain.scope_board import apply_priority_queue_reorder, queue_significance_positions
+from app.domain.scope_board import (
+    apply_priority_queue_ranked_update,
+    apply_priority_queue_reorder,
+    queue_significance_positions,
+)
 
 
 def _issue(key: str, sp: int):
@@ -9,10 +13,11 @@ def test_queue_significance_positions():
     assert queue_significance_positions(["A-1", "B-2"]) == {"A-1": 1, "B-2": 2}
 
 
-def test_apply_priority_queue_reorder_sets_significance_for_all_issues():
+def test_apply_priority_queue_reorder_sets_significance_for_ranked_issues():
     queue = {
+        "ranked_order": ["P-1", "P-2"],
         "order": ["P-1", "P-2"],
-        "issues": [_issue("P-1", 1), _issue("P-2", 2)],
+        "issues": [_issue("P-1", 1), _issue("P-2", 2), _issue("P-3", 3)],
         "history": [],
     }
     updated = apply_priority_queue_reorder(
@@ -24,4 +29,50 @@ def test_apply_priority_queue_reorder_sets_significance_for_all_issues():
         queue_label="Задачи к тестированию",
         moved_key="P-2",
     )
-    assert [issue["significance"] for issue in updated["issues"]] == [1, 2]
+    by_key = {issue["key"]: issue for issue in updated["issues"]}
+    assert by_key["P-2"]["significance"] == 1
+    assert by_key["P-1"]["significance"] == 2
+    assert "significance" not in by_key["P-3"]
+
+
+def test_apply_priority_queue_ranked_update_adds_issue_from_warehouse():
+    queue = {
+        "ranked_order": ["P-1"],
+        "order": ["P-1"],
+        "issues": [_issue("P-1", 1), _issue("P-2", 2)],
+        "history": [],
+    }
+    updated = apply_priority_queue_ranked_update(
+        queue,
+        ranked_order=["P-2", "P-1"],
+        comment="",
+        actor_name="PO",
+        changed_at="2026-06-12T11:00:00+00:00",
+        queue_label="Задачи к выполнению",
+        moved_key="P-2",
+    )
+    assert updated["ranked_order"] == ["P-2", "P-1"]
+    assert updated["removed_from_ranked"] == []
+
+
+def test_apply_priority_queue_ranked_update_removes_issue_to_warehouse():
+    queue = {
+        "ranked_order": ["P-1", "P-2"],
+        "order": ["P-1", "P-2"],
+        "issues": [_issue("P-1", 1), _issue("P-2", 2)],
+        "history": [],
+    }
+    updated = apply_priority_queue_ranked_update(
+        queue,
+        ranked_order=["P-2"],
+        comment="",
+        actor_name="PO",
+        changed_at="2026-06-12T11:00:00+00:00",
+        queue_label="Задачи к выполнению",
+        moved_key="P-1",
+    )
+    assert updated["ranked_order"] == ["P-2"]
+    assert updated["removed_from_ranked"] == ["P-1"]
+    by_key = {issue["key"]: issue for issue in updated["issues"]}
+    assert "significance" not in by_key["P-1"]
+    assert by_key["P-2"]["significance"] == 1

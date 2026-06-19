@@ -27,6 +27,7 @@ from app.domain.session import Session
 from app.domain.task import Task
 from app.domain.scope_board import (
     apply_priority_queue_comment,
+    apply_priority_queue_ranked_update,
     apply_priority_queue_reorder,
     build_release_context,
     build_scope_snapshot,
@@ -438,7 +439,7 @@ class ScopeResolveQuestionRequest(BaseModel):
 
 
 class ScopeQueueReorderRequest(BaseModel):
-    order: list[str] = Field(min_length=1, max_length=500)
+    order: list[str] = Field(default_factory=list, max_length=500)
     comment: str = Field(default="", max_length=4000)
     moved_key: str = Field(min_length=1, max_length=64)
 
@@ -1825,6 +1826,16 @@ async def _put_jira_issue_significance(issue_key: str, significance: int) -> boo
         await client.close()
 
 
+async def _clear_jira_issue_significance(issue_key: str) -> bool:
+    from app.adapters.jira_service_client import JiraServiceHttpClient
+
+    client = JiraServiceHttpClient()
+    try:
+        return await client.clear_significance(issue_key)
+    finally:
+        await client.close()
+
+
 async def _sync_queue_significance_to_jira(order: list[str], *, moved_key: Optional[str] = None) -> list[str]:
     """Best-effort Jira sync; returns issue keys that could not be updated."""
     positions = queue_significance_positions(order)
@@ -1855,6 +1866,25 @@ async def _sync_queue_significance_to_jira(order: list[str], *, moved_key: Optio
             len(failures),
             failures[:10],
         )
+    return failures
+
+
+async def _clear_queue_significance_in_jira(issue_keys: list[str]) -> list[str]:
+    failures: list[str] = []
+    for issue_key in issue_keys:
+        try:
+            cleared = await _clear_jira_issue_significance(issue_key)
+        except Exception as exc:
+            logger.warning(
+                "scope queue significance Jira clear failed key=%s error=%s",
+                issue_key,
+                exc,
+            )
+            failures.append(issue_key)
+            continue
+        if not cleared:
+            logger.warning("scope queue significance Jira clear rejected key=%s", issue_key)
+            failures.append(issue_key)
     return failures
 
 
@@ -2958,16 +2988,16 @@ async def cms_reorder_scope_priority_queue(
 
     snapshot = existing.get("snapshot") or {}
     queues = dict(snapshot.get("priority_queues") or {})
-    current_queue = queues.get(kind) or {"order": [], "issues": [], "history": []}
+    current_queue = queues.get(kind) or {"ranked_order": [], "issues": [], "history": []}
     cleaned_comment = body.comment.strip()
 
     actor_name = actor.display_name or actor.username
     changed_at = datetime.now(timezone.utc).isoformat()
     queue_label = priority_queue_label(kind)  # type: ignore[arg-type]
     try:
-        next_queue = apply_priority_queue_reorder(
+        next_queue = apply_priority_queue_ranked_update(
             current_queue,
-            order=body.order,
+            ranked_order=body.order,
             comment=cleaned_comment,
             actor_name=actor_name,
             changed_at=changed_at,
@@ -3002,10 +3032,15 @@ async def cms_reorder_scope_priority_queue(
     board = await _get_cms_store(request).save_scope_board_snapshot(board_id, next_snapshot)
     if not board:
         raise HTTPException(status_code=404, detail="Scope board not found")
+    ranked_order = list(next_queue.get("ranked_order") or next_queue.get("order") or [])
+    removed_from_ranked = list(next_queue.get("removed_from_ranked") or [])
     significance_failures = await _sync_queue_significance_to_jira(
-        list(next_queue.get("order") or []),
+        ranked_order,
         moved_key=str(moved_key) if moved_key else None,
     )
+    if removed_from_ranked:
+        clear_failures = await _clear_queue_significance_in_jira(removed_from_ranked)
+        significance_failures = [*significance_failures, *clear_failures]
     if moved_key and jira_comment:
         try:
             await _post_jira_issue_comment(str(moved_key), jira_comment)

@@ -1086,6 +1086,15 @@ def compute_scope_report(
 
 
 PriorityQueueKind = Literal["todo", "test"]
+QueueWarehouseType = Literal["story", "incident", "bug", "task"]
+
+_WAREHOUSE_TYPE_ORDER: tuple[QueueWarehouseType, ...] = ("story", "incident", "bug", "task")
+_WAREHOUSE_TYPE_LABELS: dict[QueueWarehouseType, str] = {
+    "story": "Истории",
+    "incident": "Инциденты",
+    "bug": "Баги",
+    "task": "Задачи",
+}
 
 _PRIORITY_QUEUE_LABELS = {
     "todo": "Задачи к выполнению",
@@ -1118,6 +1127,45 @@ def priority_queue_milestone_targets(kind: PriorityQueueKind) -> list[str]:
 
 def priority_queue_label(kind: PriorityQueueKind) -> str:
     return _PRIORITY_QUEUE_LABELS[kind]
+
+
+def queue_warehouse_type(issue: dict[str, Any]) -> QueueWarehouseType:
+    key = str(issue.get("key") or "").strip().upper()
+    if key.startswith("INC-"):
+        return "incident"
+    issue_type = str(issue.get("issue_type") or "").strip().lower()
+    if issue_type in {"story", "user story", "история"}:
+        return "story"
+    if issue_type in {"incident", "инцидент"}:
+        return "incident"
+    if issue_type in {"bug", "баг", "defect", "ошибка"}:
+        return "bug"
+    return "task"
+
+
+def warehouse_type_sort_key(issue: dict[str, Any]) -> int:
+    try:
+        return _WAREHOUSE_TYPE_ORDER.index(queue_warehouse_type(issue))
+    except ValueError:
+        return len(_WAREHOUSE_TYPE_ORDER)
+
+
+def _normalize_ranked_order(queue: dict[str, Any]) -> list[str]:
+    ranked = queue.get("ranked_order")
+    if isinstance(ranked, list) and ranked:
+        return [str(key) for key in ranked if str(key).strip()]
+    legacy_order = queue.get("order")
+    if isinstance(legacy_order, list) and legacy_order:
+        return [str(key) for key in legacy_order if str(key).strip()]
+    return []
+
+
+def _queue_ranked_order_keys(queue: dict[str, Any]) -> list[str]:
+    return _normalize_ranked_order(queue)
+
+
+def _empty_warehouse_new_counts() -> dict[str, int]:
+    return {kind: 0 for kind in _WAREHOUSE_TYPE_ORDER}
 
 
 def _queue_issues_by_key(issues: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
@@ -1188,10 +1236,11 @@ def merge_priority_queue(
     queue_label: str,
     refreshed_at: str,
 ) -> dict[str, Any]:
-    """Merge Jira fetch into a grooming queue while preserving manual order."""
+    """Merge Jira fetch into ranked + warehouse queue model."""
     fresh_by_key = _queue_issues_by_key(fetched_issues)
     previous = previous_queue or {}
     previous_by_key = _queue_issues_by_key(previous.get("issues") or [])
+    previous_keys = set(previous_by_key.keys())
 
     merged_by_key: dict[str, dict[str, Any]] = {}
     for key, issue in fresh_by_key.items():
@@ -1203,20 +1252,26 @@ def merge_priority_queue(
                     merged[field] = prev_issue[field]
         merged_by_key[key] = merged
 
-    previous_order = [str(key) for key in previous.get("order") or [] if str(key) in merged_by_key]
-    new_keys = sorted(
-        [key for key in merged_by_key if key not in previous_order],
-        key=lambda key: (
-            _queue_issue_type_rank(merged_by_key[key]),
-            jira_priority_rank(merged_by_key[key].get("priority")),
-            key,
-        ),
-    )
-    raw_order = new_keys + previous_order
-    order = [key for key in raw_order if _queue_issue_type_rank(merged_by_key[key]) == 0] + [
-        key for key in raw_order if _queue_issue_type_rank(merged_by_key[key]) != 0
-    ]
-    issues = [merged_by_key[key] for key in order]
+    ranked_order = [key for key in _normalize_ranked_order(previous) if key in merged_by_key]
+    ranked_upper = {str(key).upper() for key in ranked_order}
+
+    for index, key in enumerate(ranked_order):
+        issue = merged_by_key.get(key)
+        if issue:
+            issue["significance"] = index + 1
+
+    for key, issue in merged_by_key.items():
+        if str(key).upper() not in ranked_upper:
+            issue.pop("significance", None)
+
+    issues = list(merged_by_key.values())
+    new_keys = [key for key in merged_by_key if key not in previous_keys]
+    warehouse_new_keys = [key for key in new_keys if str(key).upper() not in ranked_upper]
+    warehouse_new_counts = _empty_warehouse_new_counts()
+    for key in warehouse_new_keys:
+        warehouse_type = queue_warehouse_type(merged_by_key[key])
+        warehouse_new_counts[warehouse_type] = warehouse_new_counts.get(warehouse_type, 0) + 1
+
     history = list(previous.get("history") or [])
     filter_seen_at = dict(previous.get("filter_seen_at") or {})
 
@@ -1229,18 +1284,18 @@ def merge_priority_queue(
     history = _rebuild_queue_appeared_history(issues, history, queue_label=queue_label)
 
     return {
-        "order": order,
+        "ranked_order": ranked_order,
+        "order": ranked_order,
         "issues": issues,
         "history": history,
         "filter_seen_at": filter_seen_at,
+        "warehouse_new_counts": warehouse_new_counts,
+        "warehouse_new_keys": warehouse_new_keys,
     }
 
 
 def _queue_order_keys(queue: dict[str, Any]) -> list[str]:
-    order = queue.get("order")
-    if isinstance(order, list) and order:
-        return [str(key) for key in order if key]
-    return [str(issue.get("key") or "") for issue in queue.get("issues") or [] if issue.get("key")]
+    return _queue_ranked_order_keys(queue)
 
 
 def _detect_moved_key(previous_order: list[str], next_order: list[str]) -> tuple[Optional[str], Optional[int], Optional[int]]:
@@ -1272,10 +1327,39 @@ def queue_significance_positions(order: list[str]) -> dict[str, int]:
     return positions
 
 
-def apply_priority_queue_reorder(
+def _resolve_ranked_move(
+    previous_ranked: list[str],
+    next_ranked: list[str],
+    moved_key: Optional[str],
+) -> tuple[Optional[str], Optional[int], Optional[int], list[str]]:
+    prev_index = {str(key).upper(): index for index, key in enumerate(previous_ranked)}
+    next_index = {str(key).upper(): index for index, key in enumerate(next_ranked)}
+    removed = [key for key in previous_ranked if str(key).upper() not in next_index]
+
+    explicit = (moved_key or "").strip().upper()
+    if explicit and explicit in next_index:
+        return explicit, prev_index.get(explicit), next_index[explicit], removed
+    if explicit and explicit in prev_index and explicit not in next_index:
+        return explicit, prev_index[explicit], None, removed
+
+    moved_key_resolved, from_index, to_index = _detect_moved_key(previous_ranked, next_ranked)
+    if moved_key_resolved:
+        return str(moved_key_resolved).upper(), from_index, to_index, removed
+
+    added = [key for key in next_ranked if str(key).upper() not in prev_index]
+    if len(added) == 1:
+        key = str(added[0]).upper()
+        return key, None, next_index.get(key), removed
+    if len(removed) == 1 and not added:
+        key = str(removed[0]).upper()
+        return key, prev_index.get(key), None, removed
+    return None, None, None, removed
+
+
+def apply_priority_queue_ranked_update(
     queue: dict[str, Any],
     *,
-    order: list[str],
+    ranked_order: list[str],
     comment: str,
     actor_name: str,
     changed_at: str,
@@ -1283,27 +1367,29 @@ def apply_priority_queue_reorder(
     moved_key: Optional[str] = None,
 ) -> dict[str, Any]:
     updated = copy.deepcopy(queue or {})
-    current_order = _queue_order_keys(updated)
-    normalized_order = [str(key).upper() for key in order if str(key).strip()]
-    current_set = {key.upper() for key in current_order}
-    next_set = set(normalized_order)
-    if current_set != next_set or len(normalized_order) != len(current_order):
-        raise ValueError("Order must include exactly the same issue keys as the current queue")
+    current_ranked = _queue_ranked_order_keys(updated)
 
     by_key = _queue_issues_by_key(updated.get("issues") or [])
     by_key_upper = {str(key).upper(): issue for key, issue in by_key.items()}
+    pool_keys = set(by_key_upper.keys())
+
     canonical_order: list[str] = []
-    for key in normalized_order:
-        issue = by_key_upper.get(key)
-        if issue:
-            canonical_order.append(str(issue.get("key") or key))
-    moved_key_resolved, from_index, to_index = _detect_moved_key(current_order, canonical_order)
-    if moved_key:
-        explicit = moved_key.strip().upper()
-        if explicit in {str(key).upper() for key in canonical_order}:
-            moved_key_resolved = explicit
-            from_index = current_order.index(next(key for key in current_order if str(key).upper() == explicit))
-            to_index = canonical_order.index(next(key for key in canonical_order if str(key).upper() == explicit))
+    seen: set[str] = set()
+    for key in ranked_order:
+        normalized = str(key).strip().upper()
+        if not normalized or normalized in seen:
+            continue
+        if normalized not in pool_keys:
+            raise ValueError(f"Issue {key} not found in queue")
+        issue = by_key_upper[normalized]
+        canonical_order.append(str(issue.get("key") or key))
+        seen.add(normalized)
+
+    moved_key_resolved, from_index, to_index, removed_from_ranked = _resolve_ranked_move(
+        current_ranked,
+        canonical_order,
+        moved_key,
+    )
     if moved_key_resolved:
         lookup = by_key_upper.get(moved_key_resolved.upper()) or by_key.get(moved_key_resolved)
         if lookup and comment.strip():
@@ -1311,14 +1397,22 @@ def apply_priority_queue_reorder(
             lookup["grooming_comment_by"] = actor_name
             lookup["grooming_comment_at"] = changed_at
 
-    for key, significance in queue_significance_positions(canonical_order).items():
-        issue = by_key_upper.get(key)
-        if issue:
-            issue["significance"] = significance
+    ranked_upper = {str(key).upper() for key in canonical_order}
+    for key, issue in by_key.items():
+        upper = str(key).upper()
+        if upper in ranked_upper:
+            position = next(index for index, ranked_key in enumerate(canonical_order) if str(ranked_key).upper() == upper)
+            issue["significance"] = position + 1
+        else:
+            issue.pop("significance", None)
 
     message = f"{queue_label}: изменён порядок"
-    if moved_key_resolved and from_index is not None and to_index is not None:
+    if moved_key_resolved and to_index is not None and from_index is not None:
         message = f"{queue_label}: {moved_key_resolved} {from_index + 1} → {to_index + 1}"
+    elif moved_key_resolved and to_index is not None:
+        message = f"{queue_label}: {moved_key_resolved} добавлена на позицию {to_index + 1}"
+    elif moved_key_resolved and from_index is not None:
+        message = f"{queue_label}: {moved_key_resolved} убрана из очереди"
 
     history = _append_queue_history(
         list(updated.get("history") or []),
@@ -1334,10 +1428,33 @@ def apply_priority_queue_reorder(
             "message": message,
         },
     )
+    updated["ranked_order"] = canonical_order
     updated["order"] = canonical_order
-    updated["issues"] = [by_key_upper[str(key).upper()] for key in canonical_order if str(key).upper() in by_key_upper]
+    updated["issues"] = list(by_key.values())
     updated["history"] = history
+    updated["removed_from_ranked"] = removed_from_ranked
     return updated
+
+
+def apply_priority_queue_reorder(
+    queue: dict[str, Any],
+    *,
+    order: list[str],
+    comment: str,
+    actor_name: str,
+    changed_at: str,
+    queue_label: str,
+    moved_key: Optional[str] = None,
+) -> dict[str, Any]:
+    return apply_priority_queue_ranked_update(
+        queue,
+        ranked_order=order,
+        comment=comment,
+        actor_name=actor_name,
+        changed_at=changed_at,
+        queue_label=queue_label,
+        moved_key=moved_key,
+    )
 
 
 def apply_priority_queue_comment(
