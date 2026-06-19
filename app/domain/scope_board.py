@@ -904,6 +904,14 @@ def pause_supplement_jql(base_jql: str) -> str:
     )
 
 
+def jql_has_status_filter(jql: str) -> bool:
+    """True when JQL already constrains workflow status (pause supplement would be redundant)."""
+    text = jql.strip().lower()
+    if not text:
+        return False
+    return bool(re.search(r"\bstatus\s*(?:=|!=|in|not in|was not|was|changed)", text))
+
+
 def default_scope_sections() -> list[dict[str, Any]]:
     return [
         {"id": "plan", "name": "Plan", "jql": "", "kind": "planned", "order": 0},

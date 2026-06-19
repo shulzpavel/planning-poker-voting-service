@@ -39,6 +39,7 @@ from app.domain.scope_board import (
     infer_scope_report_type,
     infer_release_version_lookup,
     is_scope_creep,
+    jql_has_status_filter,
     merge_priority_queue,
     merge_jira_role_fields_configured,
     merge_scope_issues,
@@ -1608,19 +1609,17 @@ async def _fetch_scope_issues(
     )
 
 
-async def _fetch_scope_sections(
-    sections: list[dict[str, Any]],
+async def _fetch_scope_section(
+    section: dict[str, Any],
     client: Any,
     *,
     force_refresh: bool = False,
-) -> tuple[list[dict[str, Any]], list[_ScopeJqlFetchResult]]:
-    fetched_sections: list[dict[str, Any]] = []
-    outcomes: list[_ScopeJqlFetchResult] = []
-    for section in sections:
-        jql = str(section.get("jql") or "").strip()
-        if not jql:
-            fetched_sections.append({**section, "issues": []})
-            continue
+) -> tuple[dict[str, Any], list[_ScopeJqlFetchResult]]:
+    jql = str(section.get("jql") or "").strip()
+    if not jql:
+        return {**section, "issues": []}, []
+
+    if jql_has_status_filter(jql):
         base_outcome, pause_outcome = await asyncio.gather(
             _fetch_scope_issues(
                 jql,
@@ -1635,10 +1634,37 @@ async def _fetch_scope_sections(
                 enrich_changelog=True,
             ),
         )
-        outcomes.extend([base_outcome, pause_outcome])
-        fetched_sections.append(
-            {**section, "issues": merge_scope_issues(base_outcome.issues, pause_outcome.issues)}
+        return (
+            {**section, "issues": merge_scope_issues(base_outcome.issues, pause_outcome.issues)},
+            [base_outcome, pause_outcome],
         )
+
+    base_outcome = await _fetch_scope_issues(
+        jql,
+        client,
+        force_refresh=force_refresh,
+        enrich_changelog=True,
+    )
+    return {**section, "issues": base_outcome.issues}, [base_outcome]
+
+
+async def _fetch_scope_sections(
+    sections: list[dict[str, Any]],
+    client: Any,
+    *,
+    force_refresh: bool = False,
+) -> tuple[list[dict[str, Any]], list[_ScopeJqlFetchResult]]:
+    if not sections:
+        return [], []
+
+    results = await asyncio.gather(
+        *[
+            _fetch_scope_section(section, client, force_refresh=force_refresh)
+            for section in sections
+        ]
+    )
+    fetched_sections = [item[0] for item in results]
+    outcomes = [outcome for item in results for outcome in item[1]]
     return fetched_sections, outcomes
 
 

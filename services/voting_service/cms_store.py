@@ -11,6 +11,7 @@ import base64
 import hashlib
 import json
 import logging
+import os
 import re
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -362,7 +363,9 @@ class PostgresCmsStore:
 
     @classmethod
     async def create(cls, dsn: str) -> "PostgresCmsStore":
-        pool = await asyncpg.create_pool(dsn, min_size=1, max_size=5)
+        pool_min = max(1, int(os.getenv("CMS_DB_POOL_MIN", "2")))
+        pool_max = max(pool_min, int(os.getenv("CMS_DB_POOL_MAX", "20")))
+        pool = await asyncpg.create_pool(dsn, min_size=pool_min, max_size=pool_max)
         store = cls(pool)
         await store.ensure_schema()
         return store
@@ -2032,6 +2035,31 @@ class PostgresCmsStore:
         LEFT JOIN cms_admin_accounts a ON a.id = b.created_by
     """
 
+    _SCOPE_BOARD_LIST_SELECT = """
+        SELECT b.id, b.name, b.month, b.capacity_sp, b.capacity_sp_dev, b.capacity_sp_test,
+               b.workload_mode, b.plan_jql, b.unplan_jql,
+               b.todo_jql, b.test_jql, b.report_type, b.previous_release_jql,
+               b.next_release_jql, b.custom_release_name, b.custom_release_jql,
+               b.release_queries,
+               b.release_comment, b.previous_release_comment, b.next_release_comment, b.custom_release_comment,
+               b.plan_epic_key,
+               NULL::jsonb AS scope_sections,
+               CASE
+                 WHEN b.snapshot IS NULL THEN NULL
+                 ELSE jsonb_build_object('metrics', b.snapshot->'metrics')
+               END AS snapshot,
+               NULL::jsonb AS ai_summary,
+               '[]'::jsonb AS ai_summary_history,
+               b.layout_order, b.flow_pace_chart_order,
+               b.created_by, b.created_at, b.updated_at, b.team_id,
+               t.name AS team_name, t.slug AS team_slug,
+               a.username AS created_by_username,
+               a.display_name AS created_by_display_name
+        FROM cms_scope_boards b
+        LEFT JOIN cms_teams t ON t.id = b.team_id
+        LEFT JOIN cms_admin_accounts a ON a.id = b.created_by
+    """
+
     async def list_scope_boards(
         self,
         *,
@@ -2049,7 +2077,7 @@ class PostgresCmsStore:
         async with self.pool.acquire() as conn:
             rows = await conn.fetch(
                 f"""
-                {self._SCOPE_BOARD_SELECT}
+                {self._SCOPE_BOARD_LIST_SELECT}
                 WHERE ($1::boolean OR b.team_id IS NULL OR b.team_id = ANY($2::bigint[]))
                   AND ($3::bigint IS NULL OR b.team_id IS NOT DISTINCT FROM $3)
                 ORDER BY {order_by}
