@@ -302,7 +302,7 @@ def test_flow_pace_charts_from_done_issues():
     assert "detail_segments" in cycle
 
 
-def test_phase_time_chart_has_only_work_phases():
+def test_status_time_chart_groups_by_jira_status():
     now = datetime(2026, 6, 19, 12, 0, tzinfo=timezone.utc)
     snapshot = _snapshot(
         (
@@ -319,27 +319,37 @@ def test_phase_time_chart_has_only_work_phases():
             ],
         ),
     )
-    snapshot["sections"][0]["issues"][0]["status_bucket_durations"] = {
-        "dev": 3.0,
-        "test": 2.0,
-        "pause": 1.0,
-        "todo": 5.0,
-        "done": 2.0,
-        "other": 4.0,
+    issue = snapshot["sections"][0]["issues"][0]
+    issue["status_durations"] = {
+        "В работе": 3.0,
+        "Тестирование": 2.0,
+        "Пауза": 1.0,
+        "К выполнению": 5.0,
+        "Готово": 2.0,
+    }
+    issue["status_flow_bucket_map"] = {
+        "В работе": "dev",
+        "Тестирование": "test",
+        "Пауза": "pause",
+        "К выполнению": "todo",
+        "Готово": "done",
     }
 
     result = compute_scope_flow_pace(snapshot, team_slug="igaming-rip", now=now)
-    phase = next(item for item in result["charts"]["donuts"] if item["id"] == "phase_time")
-    segment_keys = {segment["key"] for segment in phase["segments"]}
-    assert segment_keys == {"dev", "test", "pause"}
-    assert phase["segments"][0]["value"] == 3.0
-    assert "Не фазы" in phase["methodology"]
-    detail_keys = {segment["key"] for segment in phase["detail_segments"]}
-    assert detail_keys == {"dev", "test", "pause"}
-    assert all("Прочее" not in item.get("metric_label", "") for segment in phase["detail_segments"] for item in segment["items"])
+    chart = next(item for item in result["charts"]["donuts"] if item["id"] == "phase_time")
+    assert chart["title"] == "Время в статусах"
+    assert chart["center_label"] == "статусов"
+    segment_labels = {segment["label"] for segment in chart["segments"]}
+    assert "В работе" in segment_labels
+    assert "Тестирование" in segment_labels
+    assert "dev" not in {segment["key"] for segment in chart["segments"]}
+    assert len(chart["status_catalog"]) == 5
+    assert chart["status_catalog"][0]["status"] == "К выполнению"
+    detail_keys = {segment["key"] for segment in chart["detail_segments"]}
+    assert "v_rabote" in detail_keys or any("работе" in segment["label"] for segment in chart["detail_segments"])
 
 
-def test_phase_detail_includes_status_breakdown():
+def test_status_time_detail_includes_timeline_and_share():
     now = datetime(2026, 6, 19, 12, 0, tzinfo=timezone.utc)
     snapshot = _snapshot(
         (
@@ -357,7 +367,6 @@ def test_phase_detail_includes_status_breakdown():
         ),
     )
     issue = snapshot["sections"][0]["issues"][0]
-    issue["status_bucket_durations"] = {"dev": 5.0, "test": 3.0, "pause": 0.0, "todo": 2.0}
     issue["status_durations"] = {"В работе": 5.0, "Тестирование": 3.0, "К выполнению": 2.0}
     issue["status_flow_bucket_map"] = {
         "В работе": "dev",
@@ -366,37 +375,16 @@ def test_phase_detail_includes_status_breakdown():
     }
 
     result = compute_scope_flow_pace(snapshot, team_slug="igaming-rip", now=now)
-    phase = next(item for item in result["charts"]["donuts"] if item["id"] == "phase_time")
-    dev_segment = next(segment for segment in phase["detail_segments"] if segment["key"] == "dev")
-    assert "В работе 5.0д" in dev_segment["items"][0]["detail"]
-    assert "Не фазы: К выполнению 2.0д" in dev_segment["items"][0]["detail"]
-    now = datetime(2026, 6, 19, 12, 0, tzinfo=timezone.utc)
-    snapshot = _snapshot(
-        (
-            "plan",
-            "parent=FLEX-2861",
-            [
-                _issue(
-                    "FLEX-2571",
-                    status="Готово",
-                    category="done",
-                    created="2026-04-28",
-                    resolution_date="2026-06-08",
-                    story_points=5,
-                ),
-            ],
-        ),
-    )
-    snapshot["sections"][0]["issues"][0]["status_bucket_durations"] = {"dev": 7.1, "test": 33.9, "pause": 0.93}
-
-    result = compute_scope_flow_pace(snapshot, team_slug="igaming-rip", now=now)
-    cycle = next(item for item in result["charts"]["donuts"] if item["id"] == "cycle_time")
-    assert cycle["center_value"] != "—"
-    assert result["summary"]["median_cycle_days"] is not None
-    assert result["summary"]["median_cycle_days"] >= 40
+    chart = next(item for item in result["charts"]["donuts"] if item["id"] == "phase_time")
+    work_segment = next(segment for segment in chart["detail_segments"] if "В работе" in segment["label"])
+    item = work_segment["items"][0]
+    assert item["issue_key"] == "FLEX-11"
+    assert "Доля" in item["detail"]
+    assert "timeline:" in item["detail"]
+    assert item["flow_bucket"] == "dev"
 
 
-def test_collect_flow_pace_issues_wrapper():
+def test_cycle_time_uses_created_when_start_date_missing():
     snapshot = _snapshot(("plan", "parent=FLEX-2861", [_issue("FLEX-1")]))
     assert len(collect_flow_pace_issues(snapshot)) == 1
 

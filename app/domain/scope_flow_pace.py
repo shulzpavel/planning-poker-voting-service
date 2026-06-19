@@ -45,19 +45,37 @@ FLOW_PACE_TEAM_PROFILE = {
     "target_done_per_week": 8,
 }
 
-PHASE_TIME_METHODOLOGY = (
-    "Сумма дней в трёх рабочих фазах по Jira changelog (status_bucket_durations), только закрытые задачи. "
-    "Dev — разработка и ревью: В работе, In Progress, In Development, Ревью, Code Review, Review, "
-    "Ready for Dev, Reopened (+ JIRA_FLOW_DEV_STATUS_KEYWORDS). "
-    "Test/Release — QA и релиз: Тестирование, К тестированию, К релизу, Ready for Test, In Test, QA, UAT, "
-    "Acceptance, Ready for Release (+ JIRA_FLOW_TEST_STATUS_KEYWORDS). "
-    "Пауза — Пауза, Pause, On Hold, Blocked, Deferred (+ pause/blocked/пауз/блок в названии). "
-    "Не фазы (в donut не входят): очередь — Backlog, К выполнению, To Do, Open; "
-    "закрыто — Готово, Done, Closed, Resolved, Cancelled. "
-    "Любой другой активный статус → Dev (не «прочее»). "
-    "Задача может быть в нескольких сегментах детализации, если провела время в разных фазах. "
-    "В детализации — разбивка по статусам Jira (status_durations → bucket)."
+STATUS_TIME_METHODOLOGY = (
+    "Сумма дней нахождения закрытых задач в каждом статусе Jira по changelog (status_durations). "
+    "Каждый переход фиксирует интервал entered→left; текущий статус — до resolution или «сейчас». "
+    "Donut — топ статусов по суммарным дням; редкие объединены в «Ещё N статусов». "
+    "Детализация — полный список: по каждому статусу все задачи с днями, долей от timeline задачи "
+    "и справочной группой (Dev / Test / Пауза / Очередь / Закрыто). "
+    "Одна задача может быть в нескольких группах детализации."
 )
+
+_STATUS_TIME_DONUT_TOP = 8
+_STATUS_TIME_MIN_DAYS = 0.05
+_STATUS_CHART_PALETTE = (
+    "#6366f1",
+    "#8b5cf6",
+    "#06b6d4",
+    "#10b981",
+    "#f59e0b",
+    "#ef4444",
+    "#ec4899",
+    "#14b8a6",
+    "#64748b",
+    "#a855f7",
+)
+_FLOW_BUCKET_LABELS = {
+    "dev": "Dev",
+    "test": "Test/Release",
+    "pause": "Пауза",
+    "todo": "Очередь",
+    "done": "Закрыто",
+    "other": "—",
+}
 
 _THROUGHPUT_WINDOW_DAYS = 7
 _DONE_STATUS_NAMES = frozenset({"готово", "done", "closed", "resolved", "cancelled", "canceled"})
@@ -714,39 +732,6 @@ def _bucket_durations(issue: dict[str, Any]) -> dict[str, float]:
     return {}
 
 
-def _phase_status_breakdown(issue: dict[str, Any]) -> str:
-    """Per-status Jira breakdown grouped by flow phase bucket."""
-    durations = _status_durations(issue)
-    if not durations:
-        buckets = _bucket_durations(issue)
-        return (
-            f"Dev {float(buckets.get('dev') or 0):.1f} · "
-            f"Test {float(buckets.get('test') or 0):.1f} · "
-            f"Pause {float(buckets.get('pause') or 0):.1f} дн."
-        )
-
-    bucket_map = issue.get("status_flow_bucket_map")
-    if not isinstance(bucket_map, dict):
-        bucket_map = {}
-
-    grouped: dict[str, list[str]] = {"dev": [], "test": [], "pause": [], "todo": [], "done": []}
-    for status, days in sorted(durations.items(), key=lambda item: (-item[1], item[0])):
-        if not isinstance(days, (int, float)) or days < 0.05:
-            continue
-        bucket = str(bucket_map.get(status) or "").strip().lower()
-        if bucket not in grouped:
-            bucket = "dev"
-        grouped[bucket].append(f"{status} {days:.1f}д")
-
-    parts: list[str] = []
-    for bucket, label in (("dev", "Dev"), ("test", "Test"), ("pause", "Pause")):
-        if grouped[bucket]:
-            parts.append(f"{label}: {', '.join(grouped[bucket])}")
-    non_phase = grouped["todo"] + grouped["done"]
-    if non_phase:
-        parts.append(f"Не фазы: {', '.join(non_phase)}")
-    return " · ".join(parts) if parts else "Нет разбивки по статусам."
-
 
 def _status_durations(issue: dict[str, Any]) -> dict[str, float]:
     raw = issue.get("status_durations")
@@ -1131,6 +1116,14 @@ def _format_flow_date(value: Any) -> str:
     return parsed.strftime("%d.%m.%Y")
 
 
+def _parse_metric_days(value: str) -> float:
+    cleaned = value.replace(" дн.", "").replace(",", ".").strip()
+    try:
+        return float(cleaned)
+    except ValueError:
+        return 0.0
+
+
 def _chart_detail_item(
     *,
     segment_key: str,
@@ -1141,6 +1134,7 @@ def _chart_detail_item(
     detail: str = "",
     issue_url: str | None = None,
     alert: dict[str, Any] | None = None,
+    flow_bucket: str = "",
 ) -> dict[str, Any]:
     item: dict[str, Any] = {
         "segment_key": segment_key,
@@ -1153,6 +1147,8 @@ def _chart_detail_item(
     }
     if alert is not None:
         item["alert"] = alert
+    if flow_bucket:
+        item["flow_bucket"] = flow_bucket
     return item
 
 
@@ -1190,6 +1186,170 @@ def _cycle_detail_text(issue: dict[str, Any]) -> str:
     return source
 
 
+def _status_chart_key(status_name: str) -> str:
+    text = status_name.strip().lower()
+    slug = re.sub(r"\s+", "_", text)
+    slug = re.sub(r"[^\w\-]+", "", slug, flags=re.UNICODE)
+    return slug or "unknown"
+
+
+def _issue_status_durations_map(issue: dict[str, Any]) -> dict[str, float]:
+    durations = _status_durations(issue)
+    if durations:
+        return durations
+    segments = issue.get("status_segments")
+    if not isinstance(segments, list):
+        return {}
+    merged: dict[str, float] = {}
+    for segment in segments:
+        if not isinstance(segment, dict):
+            continue
+        status = str(segment.get("status") or "").strip()
+        days = segment.get("duration_days")
+        if not status or not isinstance(days, (int, float)) or days < _STATUS_TIME_MIN_DAYS:
+            continue
+        merged[status] = round(merged.get(status, 0.0) + float(days), 2)
+    return merged
+
+
+def _flow_bucket_for_status(issue: dict[str, Any], status: str) -> str:
+    bucket_map = issue.get("status_flow_bucket_map")
+    if isinstance(bucket_map, dict):
+        bucket = str(bucket_map.get(status) or "").strip().lower()
+        if bucket:
+            return bucket
+    return ""
+
+
+def _issue_status_timeline_text(issue: dict[str, Any]) -> str:
+    durations = _issue_status_durations_map(issue)
+    if not durations:
+        return "—"
+    parts = [
+        f"{status} {days:.1f}д"
+        for status, days in sorted(durations.items(), key=lambda item: (-item[1], item[0]))
+        if days >= _STATUS_TIME_MIN_DAYS
+    ]
+    return " → ".join(parts) if parts else "—"
+
+
+def _build_status_time_chart(
+    done_issues: list[dict[str, Any]],
+    *,
+    browse_base: str = "",
+) -> dict[str, Any]:
+    status_totals: dict[str, float] = {}
+    status_issue_counts: dict[str, int] = {}
+    status_bucket_by_name: dict[str, str] = {}
+    status_items: list[dict[str, Any]] = []
+
+    for issue in done_issues:
+        key = str(issue.get("key") or "")
+        summary = str(issue.get("summary") or "")
+        issue_url = _issue_browse_url(issue, browse_base=browse_base) or None
+        durations = _issue_status_durations_map(issue)
+        issue_total = sum(durations.values())
+        timeline = _issue_status_timeline_text(issue)
+
+        for status, days in durations.items():
+            if days < _STATUS_TIME_MIN_DAYS:
+                continue
+            segment_key = _status_chart_key(status)
+            status_totals[status] = round(status_totals.get(status, 0.0) + days, 2)
+            status_issue_counts[status] = status_issue_counts.get(status, 0) + 1
+            bucket = _flow_bucket_for_status(issue, status)
+            if status not in status_bucket_by_name and bucket:
+                status_bucket_by_name[status] = bucket
+
+            share = (days / issue_total * 100.0) if issue_total > 0 else 0.0
+            bucket_label = _FLOW_BUCKET_LABELS.get(bucket, "—")
+            detail = (
+                f"Доля {share:.0f}% от {issue_total:.1f} дн. задачи · группа {bucket_label} · "
+                f"timeline: {timeline}"
+            )
+            status_items.append(
+                _chart_detail_item(
+                    segment_key=segment_key,
+                    issue_key=key,
+                    summary=summary,
+                    metric_label=status,
+                    metric_value=f"{days:.1f} дн.",
+                    detail=detail,
+                    issue_url=issue_url,
+                    flow_bucket=bucket,
+                )
+            )
+
+    sorted_statuses = sorted(status_totals.items(), key=lambda item: (-item[1], item[0]))
+    total_days = round(sum(status_totals.values()), 1)
+    status_count = len(sorted_statuses)
+
+    donut_segments: list[dict[str, Any]] = []
+    for index, (status, total) in enumerate(sorted_statuses[:_STATUS_TIME_DONUT_TOP]):
+        donut_segments.append(
+            {
+                "key": _status_chart_key(status),
+                "label": status,
+                "value": round(total, 1),
+                "color": _STATUS_CHART_PALETTE[index % len(_STATUS_CHART_PALETTE)],
+            }
+        )
+    if len(sorted_statuses) > _STATUS_TIME_DONUT_TOP:
+        rest_total = round(sum(total for _, total in sorted_statuses[_STATUS_TIME_DONUT_TOP:]), 1)
+        rest_count = len(sorted_statuses) - _STATUS_TIME_DONUT_TOP
+        donut_segments.append(
+            {
+                "key": "other_statuses",
+                "label": f"Ещё {rest_count} статусов",
+                "value": rest_total,
+                "color": "#94a3b8",
+            }
+        )
+
+    segment_defs: list[tuple[str, str]] = []
+    status_catalog: list[dict[str, Any]] = []
+    for status, total in sorted_statuses:
+        segment_key = _status_chart_key(status)
+        count = status_issue_counts.get(status, 0)
+        bucket = status_bucket_by_name.get(status, "")
+        share_pct = round(total / total_days * 100.0, 1) if total_days > 0 else 0.0
+        segment_defs.append((segment_key, f"{status} · {total:.1f} дн. · {count} задач"))
+        status_catalog.append(
+            {
+                "status": status,
+                "segment_key": segment_key,
+                "total_days": round(total, 1),
+                "issue_count": count,
+                "flow_bucket": bucket,
+                "share_pct": share_pct,
+            }
+        )
+
+    detail_segments = _group_detail_segments(status_items, segment_defs)
+    for segment in detail_segments:
+        segment["items"].sort(
+            key=lambda item: (
+                -_parse_metric_days(str(item.get("metric_value") or "")),
+                str(item.get("issue_key") or ""),
+            )
+        )
+
+    subtitle = f"{total_days:.0f} дн. суммарно · {len(done_issues)} закрытых"
+    if status_count:
+        subtitle += f" · {status_count} статусов"
+
+    return {
+        "title": "Время в статусах",
+        "subtitle": subtitle,
+        "center_value": str(status_count or "—"),
+        "center_label": "статусов",
+        "segments": donut_segments,
+        "methodology": STATUS_TIME_METHODOLOGY,
+        "detail_segments": detail_segments,
+        "status_catalog": status_catalog,
+    }
+
+
 def _qa_iteration_bucket(dev_days: float, test_days: float) -> str | None:
     if dev_days <= 0 and test_days <= 0:
         return None
@@ -1210,6 +1370,7 @@ def _donut_chart(
     segments: list[dict[str, Any]],
     methodology: str = "",
     detail_segments: list[dict[str, Any]] | None = None,
+    status_catalog: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     visible = [segment for segment in segments if float(segment.get("value") or 0) > 0]
     if not visible:
@@ -1234,6 +1395,8 @@ def _donut_chart(
         chart["methodology"] = methodology
     if detail_segments is not None:
         chart["detail_segments"] = detail_segments
+    if status_catalog:
+        chart["status_catalog"] = status_catalog
     return chart
 
 
@@ -1263,12 +1426,10 @@ def _compute_flow_pace_charts(
     qa_heavy_done = 0
     balanced_done = 0
     dev_heavy_done = 0
-    phase_totals = {"dev": 0.0, "test": 0.0, "pause": 0.0}
 
     done_mix_items: list[dict[str, Any]] = []
     throughput_items: list[dict[str, Any]] = []
     cycle_items: list[dict[str, Any]] = []
-    phase_items: list[dict[str, Any]] = []
     qa_items: list[dict[str, Any]] = []
 
     for issue in done_issues:
@@ -1353,44 +1514,6 @@ def _compute_flow_pace_charts(
         buckets = _bucket_durations(issue)
         dev_days = float(buckets.get("dev") or 0.0)
         test_days = float(buckets.get("test") or 0.0)
-        pause_days = float(buckets.get("pause") or 0.0)
-        phase_detail = _phase_status_breakdown(issue)
-        if dev_days > 0:
-            phase_items.append(
-                _chart_detail_item(
-                    segment_key="dev",
-                    issue_key=key,
-                    summary=summary,
-                    metric_label="Dev",
-                    metric_value=f"{dev_days:.1f} дн.",
-                    detail=phase_detail,
-                    issue_url=issue_url,
-                )
-            )
-        if test_days > 0:
-            phase_items.append(
-                _chart_detail_item(
-                    segment_key="test",
-                    issue_key=key,
-                    summary=summary,
-                    metric_label="Test/Release",
-                    metric_value=f"{test_days:.1f} дн.",
-                    detail=phase_detail,
-                    issue_url=issue_url,
-                )
-            )
-        if pause_days > 0:
-            phase_items.append(
-                _chart_detail_item(
-                    segment_key="pause",
-                    issue_key=key,
-                    summary=summary,
-                    metric_label="Пауза",
-                    metric_value=f"{pause_days:.1f} дн.",
-                    detail=phase_detail,
-                    issue_url=issue_url,
-                )
-            )
 
         qa_bucket = _qa_iteration_bucket(dev_days, test_days)
         if qa_bucket == "qa_heavy":
@@ -1418,9 +1541,7 @@ def _compute_flow_pace_charts(
                 )
             )
 
-        phase_totals["dev"] += dev_days
-        phase_totals["test"] += test_days
-        phase_totals["pause"] += pause_days
+    status_time = _build_status_time_chart(done_issues, browse_base=browse_base)
 
     median_cycle = None
     if cycle_values:
@@ -1430,11 +1551,6 @@ def _compute_flow_pace_charts(
             median_cycle = round(sorted_cycles[mid], 1)
         else:
             median_cycle = round((sorted_cycles[mid - 1] + sorted_cycles[mid]) / 2, 1)
-
-    qa_share = 0
-    dev_test_total = phase_totals["dev"] + phase_totals["test"]
-    if dev_test_total > 0:
-        qa_share = round(phase_totals["test"] / dev_test_total * 100)
 
     cycle_subtitle = "Lead time закрытых"
     cycle_methodology = (
@@ -1530,24 +1646,14 @@ def _compute_flow_pace_charts(
         ),
         _donut_chart(
             "phase_time",
-            title="Время в фазах",
-            subtitle=f"QA-доля {qa_share}% · только закрытые",
-            center_value=f"{qa_share}%",
-            center_label="QA",
-            segments=[
-                {"key": "dev", "label": "Dev", "value": round(phase_totals["dev"], 1), "color": "#6366f1"},
-                {"key": "test", "label": "Test/Release", "value": round(phase_totals["test"], 1), "color": "#8b5cf6"},
-                {"key": "pause", "label": "Пауза", "value": round(phase_totals["pause"], 1), "color": "#94a3b8"},
-            ],
-            methodology=PHASE_TIME_METHODOLOGY,
-            detail_segments=_group_detail_segments(
-                phase_items,
-                [
-                    ("dev", "Dev"),
-                    ("test", "Test/Release"),
-                    ("pause", "Пауза"),
-                ],
-            ),
+            title=status_time["title"],
+            subtitle=status_time["subtitle"],
+            center_value=status_time["center_value"],
+            center_label=status_time["center_label"],
+            segments=status_time["segments"],
+            methodology=status_time["methodology"],
+            detail_segments=status_time["detail_segments"],
+            status_catalog=status_time["status_catalog"],
         ),
         _donut_chart(
             "qa_iterations",
