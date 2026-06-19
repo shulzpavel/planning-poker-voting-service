@@ -839,6 +839,8 @@ class PostgresCmsStore:
                 )
 
                 if bootstrap_username and bootstrap_password:
+                    # One-time bootstrap: env credentials seed the first superadmin only.
+                    # Later restarts must not reset password, is_active, or is_superuser.
                     admin_id = await conn.fetchval(
                         """
                         INSERT INTO cms_admin_accounts (
@@ -846,27 +848,23 @@ class PostgresCmsStore:
                             is_active, is_superuser, updated_at
                         )
                         VALUES ($1, $2, $3, TRUE, TRUE, NOW())
-                        ON CONFLICT (username) DO UPDATE SET
-                            password_hash = EXCLUDED.password_hash,
-                            display_name = COALESCE(cms_admin_accounts.display_name, EXCLUDED.display_name),
-                            is_active = TRUE,
-                            is_superuser = TRUE,
-                            updated_at = NOW()
+                        ON CONFLICT (username) DO NOTHING
                         RETURNING id
                         """,
                         bootstrap_username,
                         hash_password(bootstrap_password),
                         bootstrap_username,
                     )
-                    await conn.execute(
-                        """
-                        INSERT INTO cms_admin_roles (admin_id, role_id)
-                        VALUES ($1, $2)
-                        ON CONFLICT DO NOTHING
-                        """,
-                        admin_id,
-                        superadmin_role_id,
-                    )
+                    if admin_id is not None:
+                        await conn.execute(
+                            """
+                            INSERT INTO cms_admin_roles (admin_id, role_id)
+                            VALUES ($1, $2)
+                            ON CONFLICT DO NOTHING
+                            """,
+                            admin_id,
+                            superadmin_role_id,
+                        )
 
                 team_count = await conn.fetchval("SELECT COUNT(*) FROM cms_teams")
                 if team_count == 0:
