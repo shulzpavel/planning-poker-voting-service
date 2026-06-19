@@ -49,8 +49,8 @@ STATUS_TIME_METHODOLOGY = (
     "Сумма дней нахождения закрытых задач в каждом статусе Jira по changelog (status_durations). "
     "Каждый переход фиксирует интервал entered→left; текущий статус — до resolution или «сейчас». "
     "Donut — топ статусов по суммарным дням; редкие объединены в «Ещё N статусов». "
-    "Детализация — хронологический timeline задачи по changelog: "
-    "Backlog 5 дн. · К выполнению 10 дн. · В работе 2 дн. …"
+    "Детализация — список закрытых задач от самой длинной к короткой; "
+    "внутри каждой — хронологический timeline: Backlog 5 дн. · К выполнению 10 дн. · …"
 )
 
 _STATUS_TIME_DONUT_TOP = 8
@@ -1246,45 +1246,52 @@ def _issue_status_timeline_text(issue: dict[str, Any]) -> str:
     return " · ".join(f"{status} {days:.1f} дн." for status, days in steps)
 
 
+def _issue_total_status_days(issue: dict[str, Any]) -> float:
+    return round(sum(_issue_status_durations_map(issue).values()), 1)
+
+
 def _build_status_time_chart(
     done_issues: list[dict[str, Any]],
     *,
     browse_base: str = "",
 ) -> dict[str, Any]:
     status_totals: dict[str, float] = {}
-    status_issue_counts: dict[str, int] = {}
-    status_bucket_by_name: dict[str, str] = {}
-    status_items: list[dict[str, Any]] = []
+    task_items: list[dict[str, Any]] = []
 
     for issue in done_issues:
         key = str(issue.get("key") or "")
         summary = str(issue.get("summary") or "")
         issue_url = _issue_browse_url(issue, browse_base=browse_base) or None
         durations = _issue_status_durations_map(issue)
+        total_days = _issue_total_status_days(issue)
         timeline = _issue_status_timeline_text(issue)
 
         for status, days in durations.items():
             if days < _STATUS_TIME_MIN_DAYS:
                 continue
-            segment_key = _status_chart_key(status)
             status_totals[status] = round(status_totals.get(status, 0.0) + days, 2)
-            status_issue_counts[status] = status_issue_counts.get(status, 0) + 1
-            bucket = _flow_bucket_for_status(issue, status)
-            if status not in status_bucket_by_name and bucket:
-                status_bucket_by_name[status] = bucket
 
-            status_items.append(
-                _chart_detail_item(
-                    segment_key=segment_key,
-                    issue_key=key,
-                    summary=summary,
-                    metric_label=status,
-                    metric_value=f"{days:.1f} дн.",
-                    detail=timeline,
-                    issue_url=issue_url,
-                    flow_bucket=bucket,
-                )
+        if total_days < _STATUS_TIME_MIN_DAYS or timeline == "—":
+            continue
+
+        task_items.append(
+            _chart_detail_item(
+                segment_key="issues",
+                issue_key=key,
+                summary=summary,
+                metric_label="Всего",
+                metric_value=f"{total_days:.1f} дн.",
+                detail=timeline,
+                issue_url=issue_url,
             )
+        )
+
+    task_items.sort(
+        key=lambda item: (
+            -_parse_metric_days(str(item.get("metric_value") or "")),
+            str(item.get("issue_key") or ""),
+        )
+    )
 
     sorted_statuses = sorted(status_totals.items(), key=lambda item: (-item[1], item[0]))
     total_days = round(sum(status_totals.values()), 1)
@@ -1312,28 +1319,13 @@ def _build_status_time_chart(
             }
         )
 
-    segment_defs: list[tuple[str, str]] = []
-    status_catalog: list[dict[str, Any]] = []
-    for status, total in sorted_statuses:
-        segment_key = _status_chart_key(status)
-        count = status_issue_counts.get(status, 0)
-        bucket = status_bucket_by_name.get(status, "")
-        share_pct = round(total / total_days * 100.0, 1) if total_days > 0 else 0.0
-        segment_defs.append((segment_key, f"{status} · {total:.1f} дн. · {count} задач"))
-        status_catalog.append(
-            {
-                "status": status,
-                "segment_key": segment_key,
-                "total_days": round(total, 1),
-                "issue_count": count,
-                "flow_bucket": bucket,
-                "share_pct": share_pct,
-            }
-        )
-
-    detail_segments = _group_detail_segments(status_items, segment_defs)
-    for segment in detail_segments:
-        segment["items"].sort(key=lambda item: str(item.get("issue_key") or ""))
+    detail_segments = [
+        {
+            "key": "issues",
+            "label": f"Задачи · {len(task_items)}",
+            "items": task_items,
+        }
+    ]
 
     subtitle = f"{total_days:.0f} дн. суммарно · {len(done_issues)} закрытых"
     if status_count:
@@ -1347,7 +1339,6 @@ def _build_status_time_chart(
         "segments": donut_segments,
         "methodology": STATUS_TIME_METHODOLOGY,
         "detail_segments": detail_segments,
-        "status_catalog": status_catalog,
     }
 
 
@@ -1371,7 +1362,6 @@ def _donut_chart(
     segments: list[dict[str, Any]],
     methodology: str = "",
     detail_segments: list[dict[str, Any]] | None = None,
-    status_catalog: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     visible = [segment for segment in segments if float(segment.get("value") or 0) > 0]
     if not visible:
@@ -1396,8 +1386,6 @@ def _donut_chart(
         chart["methodology"] = methodology
     if detail_segments is not None:
         chart["detail_segments"] = detail_segments
-    if status_catalog:
-        chart["status_catalog"] = status_catalog
     return chart
 
 
@@ -1654,7 +1642,6 @@ def _compute_flow_pace_charts(
             segments=status_time["segments"],
             methodology=status_time["methodology"],
             detail_segments=status_time["detail_segments"],
-            status_catalog=status_time["status_catalog"],
         ),
         _donut_chart(
             "qa_iterations",

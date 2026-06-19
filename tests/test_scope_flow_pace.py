@@ -343,10 +343,13 @@ def test_status_time_chart_groups_by_jira_status():
     assert "В работе" in segment_labels
     assert "Тестирование" in segment_labels
     assert "dev" not in {segment["key"] for segment in chart["segments"]}
-    assert len(chart["status_catalog"]) == 5
-    assert chart["status_catalog"][0]["status"] == "К выполнению"
-    detail_keys = {segment["key"] for segment in chart["detail_segments"]}
-    assert "v_rabote" in detail_keys or any("работе" in segment["label"] for segment in chart["detail_segments"])
+    assert "status_catalog" not in chart
+    assert len(chart["detail_segments"]) == 1
+    assert chart["detail_segments"][0]["key"] == "issues"
+    items = chart["detail_segments"][0]["items"]
+    assert len(items) == 1
+    assert items[0]["issue_key"] == "FLEX-10"
+    assert items[0]["metric_value"] == "13.0 дн."
 
 
 def test_status_time_detail_shows_chronological_timeline():
@@ -383,12 +386,13 @@ def test_status_time_detail_shows_chronological_timeline():
 
     result = compute_scope_flow_pace(snapshot, team_slug="igaming-rip", now=now)
     chart = next(item for item in result["charts"]["donuts"] if item["id"] == "phase_time")
-    work_segment = next(segment for segment in chart["detail_segments"] if "В работе" in segment["label"])
-    item = work_segment["items"][0]
+    items = chart["detail_segments"][0]["items"]
+    assert len(items) == 1
+    item = items[0]
     assert item["issue_key"] == "FLEX-11"
     assert item["detail"] == "Backlog 5.0 дн. · К выполнению 10.0 дн. · В работе 2.0 дн. · Тестирование 3.0 дн."
     assert "Доля" not in item["detail"]
-    assert item["flow_bucket"] == "dev"
+    assert item["metric_value"] == "20.0 дн."
 
 
 def test_cycle_time_uses_created_when_start_date_missing():
