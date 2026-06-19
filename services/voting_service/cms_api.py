@@ -48,6 +48,7 @@ from app.domain.scope_board import (
     refresh_scope_snapshot_metrics,
     priority_queue_label,
     priority_queue_milestone_targets,
+    queue_significance_positions,
     release_scope_sections,
     sync_legacy_jql_from_sections,
 )
@@ -438,7 +439,7 @@ class ScopeResolveQuestionRequest(BaseModel):
 
 class ScopeQueueReorderRequest(BaseModel):
     order: list[str] = Field(min_length=1, max_length=500)
-    comment: str = Field(min_length=1, max_length=4000)
+    comment: str = Field(default="", max_length=4000)
     moved_key: str = Field(min_length=1, max_length=64)
 
 
@@ -1814,6 +1815,40 @@ async def _put_jira_issue_due_date(issue_key: str, due_date: str) -> bool:
         await client.close()
 
 
+async def _put_jira_issue_significance(issue_key: str, significance: int) -> bool:
+    from app.adapters.jira_service_client import JiraServiceHttpClient
+
+    client = JiraServiceHttpClient()
+    try:
+        return await client.update_significance(issue_key, significance)
+    finally:
+        await client.close()
+
+
+async def _sync_queue_significance_to_jira(order: list[str]) -> None:
+    positions = queue_significance_positions(order)
+    failures: list[str] = []
+    for issue_key, significance in positions.items():
+        try:
+            saved = await _put_jira_issue_significance(issue_key, significance)
+        except Exception as exc:
+            logger.warning(
+                "scope queue significance Jira update failed key=%s significance=%s error=%s",
+                issue_key,
+                significance,
+                exc,
+            )
+            failures.append(issue_key)
+            continue
+        if not saved:
+            failures.append(issue_key)
+    if failures:
+        raise HTTPException(
+            status_code=502,
+            detail="Порядок сохранён, но значимость не записана в Jira",
+        )
+
+
 def _scope_snapshot_has_issue(snapshot: dict[str, Any], issue_key: str) -> bool:
     target = issue_key.upper()
     for section in snapshot.get("sections") or []:
@@ -2916,8 +2951,6 @@ async def cms_reorder_scope_priority_queue(
     queues = dict(snapshot.get("priority_queues") or {})
     current_queue = queues.get(kind) or {"order": [], "issues": [], "history": []}
     cleaned_comment = body.comment.strip()
-    if not cleaned_comment:
-        raise HTTPException(status_code=400, detail="Comment text is required")
 
     actor_name = actor.display_name or actor.username
     changed_at = datetime.now(timezone.utc).isoformat()
@@ -2944,15 +2977,14 @@ async def cms_reorder_scope_priority_queue(
             moved_from = entry.get("from_index")
             moved_to = entry.get("to_index")
             break
-    if moved_key:
+    jira_comment = None
+    if moved_key and cleaned_comment:
         jira_comment = _grooming_jira_comment(
             queue_label,
             cleaned_comment,
             moved_from=moved_from if isinstance(moved_from, int) else None,
             moved_to=moved_to if isinstance(moved_to, int) else None,
         )
-    else:
-        jira_comment = None
 
     next_snapshot = copy.deepcopy(snapshot)
     next_queues = dict(next_snapshot.get("priority_queues") or {})
@@ -2961,6 +2993,7 @@ async def cms_reorder_scope_priority_queue(
     board = await _get_cms_store(request).save_scope_board_snapshot(board_id, next_snapshot)
     if not board:
         raise HTTPException(status_code=404, detail="Scope board not found")
+    await _sync_queue_significance_to_jira(list(next_queue.get("order") or []))
     if moved_key and jira_comment:
         try:
             await _post_jira_issue_comment(str(moved_key), jira_comment)

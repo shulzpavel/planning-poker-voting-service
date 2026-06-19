@@ -173,6 +173,7 @@ def normalize_scope_issue(raw: dict[str, Any]) -> dict[str, Any]:
         "plan_change_reason": str(raw.get("plan_change_reason") or ""),
         "plan_change_reasons": _string_list(raw.get("plan_change_reasons") or raw.get("plan_change_reason")),
         "final_priority": str(raw.get("final_priority") or ""),
+        "significance": raw.get("significance") if isinstance(raw.get("significance"), int) else None,
         "severity": str(raw.get("severity") or ""),
         "domain": str(raw.get("domain") or ""),
         "request_type": str(raw.get("request_type") or ""),
@@ -1262,6 +1263,15 @@ def _detect_moved_key(previous_order: list[str], next_order: list[str]) -> tuple
     return key, from_index, to_index
 
 
+def queue_significance_positions(order: list[str]) -> dict[str, int]:
+    positions: dict[str, int] = {}
+    for index, key in enumerate(order):
+        cleaned = str(key or "").strip().upper()
+        if cleaned:
+            positions[cleaned] = index + 1
+    return positions
+
+
 def apply_priority_queue_reorder(
     queue: dict[str, Any],
     *,
@@ -1296,10 +1306,15 @@ def apply_priority_queue_reorder(
             to_index = canonical_order.index(next(key for key in canonical_order if str(key).upper() == explicit))
     if moved_key_resolved:
         lookup = by_key_upper.get(moved_key_resolved.upper()) or by_key.get(moved_key_resolved)
-        if lookup:
+        if lookup and comment.strip():
             lookup["grooming_comment"] = comment
             lookup["grooming_comment_by"] = actor_name
             lookup["grooming_comment_at"] = changed_at
+
+    for key, significance in queue_significance_positions(canonical_order).items():
+        issue = by_key_upper.get(key)
+        if issue:
+            issue["significance"] = significance
 
     message = f"{queue_label}: изменён порядок"
     if moved_key_resolved and from_index is not None and to_index is not None:
