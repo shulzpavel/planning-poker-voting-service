@@ -37,6 +37,11 @@ from app.domain.estimation import MAX_STORY_POINTS
 from app.domain.session import Session
 from app.domain.task import Task
 from app.usecases.manage_tasks import TaskMutationResult, TaskQueueError
+from services.voting_service.cms_auth import (
+    cms_token_is_expired,
+    cms_token_version_matches,
+    resolve_cms_cookie_secure,
+)
 from services.voting_service.web_api import _build_web_session_state, _channel_name
 
 logger = logging.getLogger(__name__)
@@ -56,7 +61,7 @@ CMS_LOGIN_WINDOW_SECONDS = int(os.getenv("CMS_LOGIN_WINDOW_SECONDS", "900"))
 CMS_LOGIN_IP_MAX_ATTEMPTS = int(os.getenv("CMS_LOGIN_IP_MAX_ATTEMPTS", "20"))
 CMS_LOGIN_IP_WINDOW_SECONDS = int(os.getenv("CMS_LOGIN_IP_WINDOW_SECONDS", "900"))
 CMS_COOKIE_NAME = "cms_token"
-CMS_COOKIE_SECURE = os.getenv("CMS_COOKIE_SECURE", "false").lower() == "true"
+CMS_COOKIE_SECURE = resolve_cms_cookie_secure()
 
 ThemePreference = str  # one of: "dark", "light", "system"
 ALLOWED_THEME_PREFERENCES: frozenset[str] = frozenset({"dark", "light", "system"})
@@ -234,6 +239,10 @@ async def _require_auth(
     except json.JSONDecodeError:
         data = {}
 
+    if cms_token_is_expired(data):
+        await redis_client.delete(f"cms_token:{token}")
+        raise HTTPException(status_code=401, detail="Token expired or invalid")
+
     store = _get_cms_store(request)
     principal_record = await store.get_admin_principal(
         admin_id=data.get("admin_id"),
@@ -243,7 +252,10 @@ async def _require_auth(
         await redis_client.delete(f"cms_token:{token}")
         raise HTTPException(status_code=401, detail="Token expired or invalid")
 
-    await redis_client.expire(f"cms_token:{token}", CMS_TOKEN_TTL)
+    if not cms_token_version_matches(data, principal_record):
+        await redis_client.delete(f"cms_token:{token}")
+        raise HTTPException(status_code=401, detail="Token expired or invalid")
+
     return _principal_from_record(principal_record)
 
 

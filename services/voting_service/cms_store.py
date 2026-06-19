@@ -602,6 +602,8 @@ class PostgresCmsStore:
                 ALTER TABLE cms_admin_accounts
                     ADD COLUMN IF NOT EXISTS theme_preference TEXT NOT NULL DEFAULT 'system';
                 ALTER TABLE cms_admin_accounts
+                    ADD COLUMN IF NOT EXISTS token_version INTEGER NOT NULL DEFAULT 1;
+                ALTER TABLE cms_admin_accounts
                     DROP CONSTRAINT IF EXISTS cms_admin_accounts_theme_preference_check;
                 ALTER TABLE cms_admin_accounts
                     ADD CONSTRAINT cms_admin_accounts_theme_preference_check
@@ -1259,7 +1261,8 @@ class PostgresCmsStore:
                 """
                 SELECT id, username, display_name,
                        is_active, is_superuser, created_at, updated_at, last_login_at,
-                       COALESCE(theme_preference, 'system') AS theme_preference
+                       COALESCE(theme_preference, 'system') AS theme_preference,
+                       COALESCE(token_version, 1) AS token_version
                 FROM cms_admin_accounts
                 WHERE ($1::bigint IS NOT NULL AND id = $1)
                    OR ($2::text IS NOT NULL AND username = $2)
@@ -1806,6 +1809,7 @@ class PostgresCmsStore:
                         SET display_name = $2,
                             is_active = $3,
                             password_hash = $4,
+                            token_version = token_version + 1,
                             updated_at = NOW()
                         WHERE id = $1
                         RETURNING id
