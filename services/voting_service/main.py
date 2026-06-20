@@ -18,6 +18,7 @@ from services.voting_service.health import health_router
 from services.voting_service.metrics import metrics_router
 from services.voting_service.cms_api import cms_router
 from services.voting_service.retro_api import retro_router
+from services.voting_service.system_api import system_router
 from services.voting_service.web_api import web_router, REDIS_URL
 
 logger = logging.getLogger(__name__)
@@ -165,6 +166,7 @@ async def _on_session_mutation_conflict(
 # Include routers
 app.include_router(health_router, prefix="/health", tags=["health"])
 app.include_router(metrics_router, prefix="/metrics", tags=["metrics"])
+app.include_router(system_router, prefix="/api/v1", tags=["system"])
 app.include_router(app_router, prefix="/api/v1", tags=["app"])
 app.include_router(web_router, prefix="/api/v1", tags=["web"])
 app.include_router(cms_router, prefix="/api/v1", tags=["cms"])
