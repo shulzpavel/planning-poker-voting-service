@@ -8,7 +8,7 @@ from typing import Any, Optional
 from pydantic import BaseModel, Field
 
 MAINTENANCE_REDIS_KEY = "system:maintenance"
-MAINTENANCE_TTL_SECONDS = 30 * 60
+MAINTENANCE_TTL_SECONDS = 30 * 60  # deploy safety net if disable step is skipped
 
 
 class MaintenanceStatus(BaseModel):
