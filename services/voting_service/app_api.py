@@ -1,21 +1,58 @@
-"""Backward-compatible shim — app routes live in ``services.voting_service.app``."""
+"""Main web app API for facilitated Planning Poker sessions.
 
-from services.voting_service._http_shared import (
+Thin compatibility shim — implementation lives in ``services.voting_service.app``.
+"""
+
+from services.voting_service.app import (
+    AppSessionCreateRequest,
+    AppSessionRenameRequest,
+    AppSessionStartRequest,
+    FinalEstimateRequest,
+    ReopenCompletedRequest,
+    app_next_task,
+    app_router,
+    app_skip_task,
+    maybe_notify_session_finished,
     _audit,
-    _ensure_current_task_description,
+    _create_invite_token,
+    _csv_ai_summary_fields,
+    _csv_report,
     _get_repo_session,
+    _manager_dep,
+    _manager_session_payload,
+    _markdown_report,
     _mutate_repo_session,
     _publish_state,
-)
-from services.voting_service.app import *  # noqa: F403
-from services.voting_service.app import app_next_task, app_router, app_skip_task
-from services.voting_service.app._common import (
     _resolve_session_title,
+    _serialize_completed_task,
     _stored_session_row,
     _stored_session_title,
-)
-from services.voting_service.app.jira_export import (
-    _markdown_report,
     _summary_payload,
 )
-from services.voting_service.session_finish_notify import maybe_notify_session_finished
+
+__all__ = [
+    "AppSessionCreateRequest",
+    "AppSessionRenameRequest",
+    "AppSessionStartRequest",
+    "FinalEstimateRequest",
+    "ReopenCompletedRequest",
+    "app_router",
+    "app_next_task",
+    "app_skip_task",
+    "maybe_notify_session_finished",
+    "_audit",
+    "_create_invite_token",
+    "_csv_ai_summary_fields",
+    "_csv_report",
+    "_get_repo_session",
+    "_manager_dep",
+    "_manager_session_payload",
+    "_markdown_report",
+    "_mutate_repo_session",
+    "_publish_state",
+    "_resolve_session_title",
+    "_serialize_completed_task",
+    "_stored_session_row",
+    "_stored_session_title",
+    "_summary_payload",
+]
