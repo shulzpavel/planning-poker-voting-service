@@ -175,6 +175,27 @@ class TestUpdateJiraStoryPointsUseCase:
         assert self.repo.save_count == 1
 
     @pytest.mark.asyncio
+    async def test_skip_errors_survives_jira_client_exception(self):
+        session = Session(chat_id=123, topic_id=456)
+        session.last_batch = [
+            Task(jira_key="TEST-1", summary="Task 1", votes={1: "5"}),
+            Task(jira_key="TEST-2", summary="Task 2", votes={1: "8"}),
+        ]
+        await self.repo.save_session(session)
+        self.repo.save_count = 0
+        self.jira_client.update_story_points.side_effect = [
+            True,
+            RuntimeError("Jira Service returned status 500"),
+        ]
+
+        updated, failed, skipped = await self.use_case.execute(123, 456, skip_errors=True)
+
+        assert updated == 1
+        assert failed == ["TEST-2"]
+        assert any("500" in reason for reason in skipped)
+        assert self.repo.save_count == 1
+
+    @pytest.mark.asyncio
     async def test_split_estimates_report_rejected_configured_field(self):
         session = Session(chat_id=123, topic_id=456, estimation_mode="sp_split")
         task = Task(jira_key="TEST-2", summary="Task 2")

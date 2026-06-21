@@ -6,7 +6,12 @@ import hashlib
 import os
 import re
 
-PARTICIPANT_EMAIL_DOMAIN = os.getenv("WEB_PARTICIPANT_EMAIL_DOMAIN", "example.com").strip().lower()
+def _participant_email_domain() -> str:
+    """Corporate email domain for web join. Empty env → betboom.com (prod default)."""
+    return (os.getenv("WEB_PARTICIPANT_EMAIL_DOMAIN") or "betboom.com").strip().lower()
+
+
+PARTICIPANT_EMAIL_DOMAIN = _participant_email_domain()
 _MAX_EMAIL_LEN = 64
 
 _DOMAIN_RE = re.escape(PARTICIPANT_EMAIL_DOMAIN)
