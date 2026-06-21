@@ -86,37 +86,55 @@ class UpdateJiraStoryPointsUseCase:
             concurrency = max(1, int(os.getenv("JIRA_UPDATE_CONCURRENCY", "5")))
             semaphore = asyncio.Semaphore(concurrency)
 
-            async def update_one(jira_key: str, story_points: int) -> tuple[str, bool]:
+            async def update_one(jira_key: str, story_points: int):
                 async with semaphore:
-                    return jira_key, await self.jira_client.update_story_points(jira_key, story_points)
+                    try:
+                        return jira_key, await self.jira_client.update_story_points(jira_key, story_points)
+                    except Exception as exc:  # noqa: BLE001 — skip_errors must not abort the batch
+                        return jira_key, exc
 
             results = await asyncio.gather(
-                *(update_one(jira_key, story_points) for _, jira_key, story_points in pending_updates)
+                *(update_one(jira_key, story_points) for _, jira_key, story_points in pending_updates),
+                return_exceptions=False,
             )
             result_by_key = dict(results)
             for task, jira_key, story_points in pending_updates:
-                if result_by_key.get(jira_key):
+                outcome = result_by_key.get(jira_key)
+                if outcome is True:
                     task.story_points = story_points
                     updated += 1
+                elif isinstance(outcome, Exception):
+                    failed.append(jira_key)
+                    skipped.append(f"{jira_key}: {outcome}")
                 else:
                     failed.append(jira_key)
 
             async def update_tracks(
                 jira_key: str,
                 tracks: Dict[str, int],
-            ) -> tuple[str, Dict[str, bool], List[str]]:
+            ):
                 async with semaphore:
-                    results, skipped_tracks = await self.jira_client.update_story_points_tracks(
-                        jira_key, tracks
-                    )
-                    return jira_key, results, skipped_tracks
+                    try:
+                        results, skipped_tracks = await self.jira_client.update_story_points_tracks(
+                            jira_key, tracks
+                        )
+                        return jira_key, results, skipped_tracks
+                    except Exception as exc:  # noqa: BLE001
+                        return jira_key, exc, []
 
             track_results = await asyncio.gather(
-                *(update_tracks(jira_key, tracks) for _, jira_key, tracks, _ in pending_track_updates)
+                *(update_tracks(jira_key, tracks) for _, jira_key, tracks, _ in pending_track_updates),
+                return_exceptions=False,
             )
-            track_result_by_key = {jira_key: (results, skipped_tracks) for jira_key, results, skipped_tracks in track_results}
+            track_result_by_key = {
+                jira_key: (results, skipped_tracks) for jira_key, results, skipped_tracks in track_results
+            }
             for task, jira_key, tracks, track_labels in pending_track_updates:
                 results, skipped_tracks = track_result_by_key.get(jira_key, ({}, []))
+                if isinstance(results, Exception):
+                    failed.append(jira_key)
+                    skipped.append(f"{jira_key}: {results}")
+                    continue
                 for track_key in skipped_tracks:
                     label = track_labels.get(track_key, track_key)
                     skipped.append(
