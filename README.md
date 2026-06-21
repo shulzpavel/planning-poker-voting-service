@@ -26,7 +26,7 @@ OpenAPI: http://localhost:8002/docs
 ```text
 services/voting_service/   HTTP layer (app_api, cms_api, web_api, retro_api)
 app/domain/              Business logic (scope_board.py, …)
-app/adapters/            Postgres, Redis, Jira, Anthropic
+app/adapters/            Postgres, Redis, jira_service_client, Anthropic
 ```
 
 ## Key modules
