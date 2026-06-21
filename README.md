@@ -21,6 +21,16 @@ PYTHONPATH=. python -m services.voting_service.main
 Health: http://localhost:8002/health  
 OpenAPI: http://localhost:8002/docs
 
+## Docker
+
+Build from the **repository root** (used by `planning-poker-dev` compose):
+
+```bash
+docker build -t planning-poker-voting-service .
+```
+
+Legacy `services/voting_service/Dockerfile` (monorepo `backend/` paths) was removed.
+
 ## Architecture
 
 ```text
