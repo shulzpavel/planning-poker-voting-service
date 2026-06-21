@@ -177,7 +177,7 @@ def test_full_retro_flow(client):
 
     # Participant joins.
     join = client.post("/api/v1/retro/join", json={
-        "token": token, "name": "alice@betboom.com", "role": "backend",
+        "token": token, "name": "alice@example.com", "role": "backend",
     })
     assert join.status_code == 200
     pid = join.json()["participant_id"]
@@ -275,7 +275,7 @@ def test_close_section_then_open_next_section(client):
     retro_id = create.json()["id"]
     token = client.post(f"/api/v1/cms/retros/{retro_id}/invite").json()["token"]
     pid = client.post("/api/v1/retro/join", json={
-        "token": token, "name": "facilitator@betboom.com", "role": "backend",
+        "token": token, "name": "facilitator@example.com", "role": "backend",
     }).json()["participant_id"]
 
     opened = client.post(
@@ -329,7 +329,7 @@ def test_state_endpoint_returns_my_votes(client):
     retro_id = create.json()["id"]
     token = client.post(f"/api/v1/cms/retros/{retro_id}/invite").json()["token"]
     pid = client.post("/api/v1/retro/join", json={
-        "token": token, "name": "bob@betboom.com", "role": "qa",
+        "token": token, "name": "bob@example.com", "role": "qa",
     }).json()["participant_id"]
     client.post(f"/api/v1/cms/retros/{retro_id}/open-section", json={"section_id": "s"})
     card_id = client.post("/api/v1/retro/card", json={
@@ -355,7 +355,7 @@ def test_manager_groups_cards_and_participant_votes_for_group(client):
     retro_id = create.json()["id"]
     token = client.post(f"/api/v1/cms/retros/{retro_id}/invite").json()["token"]
     pid = client.post("/api/v1/retro/join", json={
-        "token": token, "name": "group.user@betboom.com", "role": "backend",
+        "token": token, "name": "group.user@example.com", "role": "backend",
     }).json()["participant_id"]
     client.post(f"/api/v1/cms/retros/{retro_id}/open-section", json={"section_id": "s"})
     card_ids = []
