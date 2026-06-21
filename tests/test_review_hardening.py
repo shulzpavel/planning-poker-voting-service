@@ -256,7 +256,7 @@ async def test_app_skip_task_records_single_audit_event(monkeypatch) -> None:
     monkeypatch.setattr("services.voting_service.app.sessions._publish_state", fake_publish)
     monkeypatch.setattr("services.voting_service.app.sessions._get_repo_session", fake_get)
     monkeypatch.setattr("services.voting_service.app.sessions._mutate_repo_session", fake_mutate)
-    monkeypatch.setattr(app_api, "maybe_notify_session_finished", fake_notify)
+    monkeypatch.setattr("services.voting_service.app.sessions.maybe_notify_session_finished", fake_notify)
 
     class _Actor:
         username = "manager"
@@ -304,7 +304,7 @@ async def test_app_next_task_notifies_when_last_task_auto_completes(monkeypatch)
     monkeypatch.setattr("services.voting_service.app.sessions._ensure_current_task_description", fake_noop)
     monkeypatch.setattr("services.voting_service.app.sessions._publish_state", fake_noop)
     monkeypatch.setattr("services.voting_service.app.sessions._audit", fake_noop)
-    monkeypatch.setattr(app_api, "maybe_notify_session_finished", fake_notify)
+    monkeypatch.setattr("services.voting_service.app.sessions.maybe_notify_session_finished", fake_notify)
 
     class _Actor:
         username = "manager"
