@@ -58,29 +58,32 @@ class _FakeRepo:
         return None
 
 
-class _RecordingCmsStore:
-    def __init__(self, inner: PostgresCmsStore) -> None:
-        self._inner = inner
+class _FakeCmsStore:
+    def __init__(self) -> None:
+        self.team_calls: list[tuple[int, Optional[int], Optional[int]]] = []
+        self.title_calls: list[tuple[int, Optional[int], str]] = []
 
     async def set_session_team_by_chat(self, chat_id: int, topic_id: Optional[int], team_id: Optional[int]) -> bool:
-        return await self._inner.set_session_team_by_chat(chat_id, topic_id, team_id)
+        self.team_calls.append((chat_id, topic_id, team_id))
+        return True
 
     async def record_web_token(self, token: str, chat_id: int, topic_id: Optional[int], ttl: int) -> None:
         return None
 
     async def set_session_title_by_chat(self, chat_id: int, topic_id: Optional[int], title: Optional[str], **kwargs) -> bool:
-        return await self._inner.set_session_title_by_chat(chat_id, topic_id, title, **kwargs)
+        self.title_calls.append((chat_id, topic_id, title or ""))
+        return True
 
     async def record_audit_event(self, **kwargs) -> None:
         return None
 
 
-@pytest.mark.asyncio
-async def test_create_app_session_returns_200(cms_store: PostgresCmsStore) -> None:
+def test_create_app_session_returns_200() -> None:
+    store = _FakeCmsStore()
     app = FastAPI()
     app.include_router(app_api.app_router, prefix="/api/v1")
     app.state.repository = _FakeRepo()
-    app.state.cms_store = _RecordingCmsStore(cms_store)
+    app.state.cms_store = store
     app.state.web_redis = _FakeRedis()
     app.dependency_overrides[app_api._manager_dep] = lambda: CmsPrincipal(
         id=1,
@@ -105,3 +108,5 @@ async def test_create_app_session_returns_200(cms_store: PostgresCmsStore) -> No
     assert body["title"] == "Split regression session"
     assert isinstance(body["chat_id"], int)
     assert body["chat_id"] < 0
+    assert len(store.team_calls) == 1
+    assert len(store.title_calls) == 1
