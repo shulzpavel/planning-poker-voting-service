@@ -156,6 +156,18 @@ class JiraServiceHttpClient(JiraClient):
             return {field_id: False for field_id in fields}
         return {str(field_id): bool(ok) for field_id, ok in results.items()}
 
+    async def update_story_points_tracks(
+        self, issue_key: str, tracks: Mapping[str, int]
+    ) -> tuple[Dict[str, bool], List[str]]:
+        """Update SP by semantic track keys; field mapping stays in jira-service."""
+        url = f"{self.base_url}/api/v1/issue/{issue_key}/story-points/tracks"
+        data = await self._put_json(url, {"issue_key": issue_key, "tracks": dict(tracks)})
+        results_raw = data.get("results") if isinstance(data, dict) else None
+        skipped_raw = data.get("skipped_tracks") if isinstance(data, dict) else None
+        results = {str(k): bool(v) for k, v in results_raw.items()} if isinstance(results_raw, dict) else {}
+        skipped = [str(k) for k in skipped_raw] if isinstance(skipped_raw, list) else []
+        return results, skipped
+
     async def update_due_date(self, issue_key: str, due_date: str) -> bool:
         """Update Jira due date via Jira Service."""
         url = f"{self.base_url}/api/v1/issue/{issue_key}/due-date"

@@ -151,48 +151,43 @@ class TestUpdateJiraStoryPointsUseCase:
         assert self.repo.save_count == 1
 
     @pytest.mark.asyncio
-    async def test_split_estimates_update_configured_fields_partially(self, monkeypatch):
-        from app.usecases import update_jira_sp
-
+    async def test_split_estimates_update_configured_fields_partially(self):
         session = Session(chat_id=123, topic_id=456, estimation_mode="sp_dev_test")
         task = Task(jira_key="TEST-1", summary="Task 1")
         task.story_points_by_track = {"dev": 5, "test": 3}
         session.last_batch = [task]
         await self.repo.save_session(session)
         self.repo.save_count = 0
-        monkeypatch.setitem(update_jira_sp.TRACK_FIELD_ENV, "dev", ("JIRA_SP_DEV_FIELD", "customfield_111"))
-        monkeypatch.setitem(update_jira_sp.TRACK_FIELD_ENV, "test", ("JIRA_SP_TEST_FIELD", ""))
-        self.jira_client.update_story_points_fields.return_value = {"customfield_111": True}
+        self.jira_client.update_story_points_tracks.return_value = (
+            {"dev": True, "test": False},
+            ["test"],
+        )
 
         updated, failed, skipped = await self.use_case.execute(123, 456, skip_errors=True)
 
         assert updated == 1
         assert failed == []
-        assert skipped == ["TEST-1 SP Test: поле Jira не настроено или не найдено (JIRA_SP_TEST_FIELD)"]
-        self.jira_client.update_story_points_fields.assert_awaited_once_with(
+        assert skipped == ["TEST-1 SP Test: поле Jira не настроено в jira-service (трек test)"]
+        self.jira_client.update_story_points_tracks.assert_awaited_once_with(
             "TEST-1",
-            {"customfield_111": 5},
+            {"dev": 5, "test": 3},
         )
         assert self.repo.save_count == 1
 
     @pytest.mark.asyncio
-    async def test_split_estimates_report_rejected_configured_field(self, monkeypatch):
-        from app.usecases import update_jira_sp
-
+    async def test_split_estimates_report_rejected_configured_field(self):
         session = Session(chat_id=123, topic_id=456, estimation_mode="sp_split")
         task = Task(jira_key="TEST-2", summary="Task 2")
         task.story_points_by_track = {"front": 8, "back": 5}
         session.last_batch = [task]
         await self.repo.save_session(session)
-        monkeypatch.setitem(update_jira_sp.TRACK_FIELD_ENV, "front", ("JIRA_SP_FRONT_FIELD", "customfield_201"))
-        monkeypatch.setitem(update_jira_sp.TRACK_FIELD_ENV, "back", ("JIRA_SP_BACK_FIELD", "customfield_202"))
-        self.jira_client.update_story_points_fields.return_value = {
-            "customfield_201": True,
-            "customfield_202": False,
-        }
+        self.jira_client.update_story_points_tracks.return_value = (
+            {"front": True, "back": False},
+            [],
+        )
 
         updated, failed, skipped = await self.use_case.execute(123, 456, skip_errors=True)
 
         assert updated == 1
-        assert failed == ["TEST-2 SP Back: поле Jira customfield_202 не найдено или запись отклонена"]
+        assert failed == ["TEST-2 SP Back: запись в Jira отклонена"]
         assert skipped == []

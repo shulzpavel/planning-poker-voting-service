@@ -10,22 +10,6 @@ from app.domain.task import Task
 from app.ports.jira_client import JiraClient
 from app.ports.session_repository import SessionRepository
 from app.usecases.show_results import VotingPolicy
-from config import (
-    JIRA_SP_BACK_FIELD,
-    JIRA_SP_DEV_FIELD,
-    JIRA_SP_FRONT_FIELD,
-    JIRA_SP_QA_FIELD,
-    JIRA_SP_TEST_FIELD,
-)
-
-
-TRACK_FIELD_ENV = {
-    "dev": ("JIRA_SP_DEV_FIELD", JIRA_SP_DEV_FIELD),
-    "test": ("JIRA_SP_TEST_FIELD", JIRA_SP_TEST_FIELD),
-    "front": ("JIRA_SP_FRONT_FIELD", JIRA_SP_FRONT_FIELD),
-    "back": ("JIRA_SP_BACK_FIELD", JIRA_SP_BACK_FIELD),
-    "qa": ("JIRA_SP_QA_FIELD", JIRA_SP_QA_FIELD),
-}
 
 
 class UpdateJiraStoryPointsUseCase:
@@ -56,7 +40,7 @@ class UpdateJiraStoryPointsUseCase:
         failed: List[str] = []
         skipped: List[str] = []
         pending_updates: list[tuple[Task, str, int]] = []
-        pending_track_updates: list[tuple[Task, str, Dict[str, int], Dict[str, tuple[str, int]]]] = []
+        pending_track_updates: list[tuple[Task, str, Dict[str, int], Dict[str, str]]] = []
         
         for task in session.last_batch:
             if not task.jira_key:
@@ -65,20 +49,14 @@ class UpdateJiraStoryPointsUseCase:
                 continue
 
             if is_split_mode(session.estimation_mode) and task.story_points_by_track:
-                jira_fields: Dict[str, int] = {}
-                track_meta: Dict[str, tuple[str, int]] = {}
+                tracks: Dict[str, int] = {}
+                track_labels: Dict[str, str] = {}
                 for track_key, value in task.story_points_by_track.items():
-                    env_name, field_id = TRACK_FIELD_ENV.get(track_key, (f"JIRA_SP_{track_key.upper()}_FIELD", ""))
                     track_label = self._track_label(session.estimation_mode, track_key)
-                    if not field_id:
-                        skipped.append(
-                            f"{task.jira_key} {track_label}: поле Jira не настроено или не найдено ({env_name})"
-                        )
-                        continue
-                    jira_fields[field_id] = int(value)
-                    track_meta[field_id] = (track_label, int(value))
-                if jira_fields:
-                    pending_track_updates.append((task, task.jira_key, jira_fields, track_meta))
+                    tracks[track_key] = int(value)
+                    track_labels[track_key] = track_label
+                if tracks:
+                    pending_track_updates.append((task, task.jira_key, tracks, track_labels))
                 elif not skip_errors:
                     failed.append(task.jira_key)
                 continue
@@ -125,23 +103,33 @@ class UpdateJiraStoryPointsUseCase:
 
             async def update_tracks(
                 jira_key: str,
-                fields: Dict[str, int],
-            ) -> tuple[str, Dict[str, bool]]:
+                tracks: Dict[str, int],
+            ) -> tuple[str, Dict[str, bool], List[str]]:
                 async with semaphore:
-                    return jira_key, await self.jira_client.update_story_points_fields(jira_key, fields)
+                    results, skipped_tracks = await self.jira_client.update_story_points_tracks(
+                        jira_key, tracks
+                    )
+                    return jira_key, results, skipped_tracks
 
             track_results = await asyncio.gather(
-                *(update_tracks(jira_key, fields) for _, jira_key, fields, _ in pending_track_updates)
+                *(update_tracks(jira_key, tracks) for _, jira_key, tracks, _ in pending_track_updates)
             )
-            track_result_by_key = dict(track_results)
-            for task, jira_key, fields, track_meta in pending_track_updates:
-                results = track_result_by_key.get(jira_key, {})
-                for field_id, value in fields.items():
-                    label, _ = track_meta[field_id]
-                    if results.get(field_id):
+            track_result_by_key = {jira_key: (results, skipped_tracks) for jira_key, results, skipped_tracks in track_results}
+            for task, jira_key, tracks, track_labels in pending_track_updates:
+                results, skipped_tracks = track_result_by_key.get(jira_key, ({}, []))
+                for track_key in skipped_tracks:
+                    label = track_labels.get(track_key, track_key)
+                    skipped.append(
+                        f"{jira_key} {label}: поле Jira не настроено в jira-service (трек {track_key})"
+                    )
+                for track_key, ok in results.items():
+                    if track_key in skipped_tracks:
+                        continue
+                    label = track_labels.get(track_key, track_key)
+                    if ok:
                         updated += 1
                     else:
-                        failed.append(f"{jira_key} {label}: поле Jira {field_id} не найдено или запись отклонена")
+                        failed.append(f"{jira_key} {label}: запись в Jira отклонена")
         else:
             for task, jira_key, story_points in pending_updates:
                 if await self.jira_client.update_story_points(jira_key, story_points):
@@ -150,14 +138,21 @@ class UpdateJiraStoryPointsUseCase:
                 else:
                     failed.append(jira_key)
                     break
-            for task, jira_key, fields, track_meta in pending_track_updates:
-                results = await self.jira_client.update_story_points_fields(jira_key, fields)
-                for field_id, value in fields.items():
-                    label, _ = track_meta[field_id]
-                    if results.get(field_id):
+            for task, jira_key, tracks, track_labels in pending_track_updates:
+                results, skipped_tracks = await self.jira_client.update_story_points_tracks(jira_key, tracks)
+                for track_key in skipped_tracks:
+                    label = track_labels.get(track_key, track_key)
+                    skipped.append(
+                        f"{jira_key} {label}: поле Jira не настроено в jira-service (трек {track_key})"
+                    )
+                for track_key, ok in results.items():
+                    if track_key in skipped_tracks:
+                        continue
+                    label = track_labels.get(track_key, track_key)
+                    if ok:
                         updated += 1
                     else:
-                        failed.append(f"{jira_key} {label}: поле Jira {field_id} не найдено или запись отклонена")
+                        failed.append(f"{jira_key} {label}: запись в Jira отклонена")
                         break
 
         if updated:

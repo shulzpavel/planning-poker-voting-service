@@ -30,6 +30,12 @@ class JiraClient(ABC):
                 results[field_id] = await self.update_story_points(issue_key, value)
         return results
 
+    async def update_story_points_tracks(
+        self, issue_key: str, tracks: Mapping[str, int]
+    ) -> tuple[Dict[str, bool], List[str]]:
+        """Update SP by semantic track keys via jira-service. Returns (results, skipped_tracks)."""
+        raise NotImplementedError("update_story_points_tracks requires JiraServiceHttpClient")
+
     @abstractmethod
     async def parse_jira_request(self, text: str, max_results: int = 500) -> Optional[List[Dict[str, Any]]]:
         """Return list of tasks by JQL or issue keys."""
