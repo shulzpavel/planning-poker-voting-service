@@ -32,10 +32,8 @@ def slice_lines(start: int, end: int) -> str:
 
 
 def unindent_class_body(text: str) -> str:
-    out: list[str] = []
-    for line in text.splitlines(keepends=True):
-        out.append(line[4:] if line.startswith("    ") else line)
-    return "".join(out)
+    """Keep one class-level indent (4 spaces) from the monolith methods."""
+    return text
 
 
 def write(path: Path, content: str) -> None:

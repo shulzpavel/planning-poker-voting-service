@@ -1,4 +1,4 @@
-"""CMS store mixin: teams."""
+"""CMS store mixin: CMS team CRUD."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from services.voting_service.cms_store._helpers import _team_row, normalize_team
 
 
 class TeamsMixin:
-    """Mixin for PostgresCmsStore."""
+    """Team listing and mutation."""
 
     async def list_teams(
         self,
@@ -18,7 +18,7 @@ class TeamsMixin:
         include_inactive: bool = False,
     ) -> list[dict[str, Any]]:
         actor_team_ids = actor_team_ids or []
-        async with self._pool.acquire() as conn:
+        async with self.pool.acquire() as conn:
             rows = await conn.fetch(
                 """
                 SELECT id, slug, name, description, is_active, created_at, updated_at
@@ -34,7 +34,7 @@ class TeamsMixin:
         return [_team_row(row) for row in rows]
 
     async def get_team(self, team_id: int) -> Optional[dict[str, Any]]:
-        async with self._pool.acquire() as conn:
+        async with self.pool.acquire() as conn:
             row = await conn.fetchrow(
                 """
                 SELECT id, slug, name, description, is_active, created_at, updated_at
@@ -51,7 +51,7 @@ class TeamsMixin:
         name: str,
         description: str = "",
     ) -> dict[str, Any]:
-        async with self._pool.acquire() as conn:
+        async with self.pool.acquire() as conn:
             row = await conn.fetchrow(
                 """
                 INSERT INTO cms_teams (slug, name, description, updated_at)
@@ -72,7 +72,7 @@ class TeamsMixin:
         description: Optional[str] = None,
         is_active: Optional[bool] = None,
     ) -> Optional[dict[str, Any]]:
-        async with self._pool.acquire() as conn:
+        async with self.pool.acquire() as conn:
             row = await conn.fetchrow(
                 """
                 UPDATE cms_teams
@@ -89,3 +89,4 @@ class TeamsMixin:
                 is_active,
             )
         return _team_row(row) if row else None
+
