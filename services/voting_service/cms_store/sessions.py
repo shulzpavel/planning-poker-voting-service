@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+from decimal import Decimal
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
