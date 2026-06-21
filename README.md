@@ -1,16 +1,39 @@
-# Planning Poker — Voting Service
+# planning-poker-voting-service
 
-FastAPI service for live sessions, web voting, CMS/RBAC, retrospectives, scope boards, and AI features.
+FastAPI backend for live planning poker sessions, participant voting, CMS/RBAC, scope boards, retrospectives, and AI orchestration.
+
+**Port:** 8002 (local) · **Prod API:** `https://planning.shults-sync.com/api/v1/*`
+
+## Role in the stack
+
+| Owns | Does **not** |
+|---|---|
+| Postgres CMS read model, RBAC, team scope | Direct Jira REST calls |
+| Redis live sessions, web tokens, AI jobs, rate limits | Static UI (see `planning-poker-web`) |
+| Scope/retro domain logic | Jira enrichment (see `planning-poker-jira-service`) |
+| HTTP to jira-service, Anthropic, Telegram | |
+
+Canonical architecture: [planning-poker-dev/docs/architecture/SERVICES.md](https://github.com/shulzpavel/planning-poker-dev/blob/main/docs/architecture/SERVICES.md)
 
 ## Documentation
 
-Central docs in [planning-poker-dev/docs](https://github.com/shulzpavel/planning-poker-dev/tree/main/docs):
-
-- [TECHNICAL.md](https://github.com/shulzpavel/planning-poker-dev/blob/main/docs/TECHNICAL.md)
-- [architecture/SERVICES.md](https://github.com/shulzpavel/planning-poker-dev/blob/main/docs/architecture/SERVICES.md)
-- [contracts/API.md](https://github.com/shulzpavel/planning-poker-dev/blob/main/docs/contracts/API.md)
+| Doc | Topic |
+|---|---|
+| [TECHNICAL.md](https://github.com/shulzpavel/planning-poker-dev/blob/main/docs/TECHNICAL.md) | Developer entry point |
+| [contracts/API.md](https://github.com/shulzpavel/planning-poker-dev/blob/main/docs/contracts/API.md) | All HTTP endpoints |
+| [contracts/SCOPE-BOARD.md](https://github.com/shulzpavel/planning-poker-dev/blob/main/docs/contracts/SCOPE-BOARD.md) | Scope snapshot & refresh |
+| [contracts/SESSIONS.md](https://github.com/shulzpavel/planning-poker-dev/blob/main/docs/contracts/SESSIONS.md) | Sessions & voting flow |
+| [development/GUIDE.md](https://github.com/shulzpavel/planning-poker-dev/blob/main/docs/development/GUIDE.md) | Best practices |
 
 ## Run locally
+
+**Recommended** — from `planning-poker-dev`:
+
+```bash
+docker compose up -d postgres redis jira-service voting-service
+```
+
+**Bare metal** (needs local Postgres + Redis + running jira-service):
 
 ```bash
 pip install -r requirements.txt
@@ -18,43 +41,58 @@ cp .env.example .env
 PYTHONPATH=. python -m services.voting_service.main
 ```
 
-Health: http://localhost:8002/health  
-OpenAPI: http://localhost:8002/docs
+| URL | Purpose |
+|---|---|
+| http://localhost:8002/health/ready | Readiness (Postgres + Redis) |
+| http://localhost:8002/docs | OpenAPI |
 
 ## Docker
 
-Build from the **repository root** (used by `planning-poker-dev` compose):
+Build from **repository root** (used by compose and CI):
 
 ```bash
 docker build -t planning-poker-voting-service .
+docker run --rm planning-poker-voting-service python -c "import planning_poker_common"
 ```
 
-Legacy `services/voting_service/Dockerfile` (monorepo `backend/` paths) was removed.
+Shared lib is pinned as a **GitHub tarball** in `requirements.txt` — do not use `git+https://` in Docker ([PYTHON-LIB.md](https://github.com/shulzpavel/planning-poker-dev/blob/main/docs/architecture/PYTHON-LIB.md)).
 
-## Architecture
+## Layout
 
 ```text
-services/voting_service/   HTTP layer (app_api, cms_api, web_api, retro_api)
-app/domain/              Business logic (scope_board.py, …)
-app/adapters/            Postgres, Redis, jira_service_client, Anthropic
+services/voting_service/
+  main.py              App wiring, lifespan, health
+  cms/                 CMS routers (auth, scope, sessions, planner, …)
+  cms_store/           Postgres CMS persistence (mixins)
+  app/                 Manager cockpit routes
+  web_api.py           Participant voting + WebSocket
+  retro_api.py         Retrospectives
+  cms_api.py           Shim → cms package
+app/domain/            Business logic (scope_board, sessions, …)
+app/adapters/          Postgres, Redis, jira_service_client, Anthropic
 ```
 
-## Key modules
+## Rules
 
-| Module | Responsibility |
-|---|---|
-| `cms_api.py` | CMS auth, scope boards, sprint plans, RBAC |
-| `app_api.py` | Manager cockpit sessions |
-| `web_api.py` | Participant voting + WebSocket |
-| `retro_api.py` | Retrospectives |
-| `scope_ai_llm.py` | Scope board AI analyze |
-| `scope_ai_jira_export.py` | Export AI summary to Jira ADF |
-| `ai_jobs.py` | Async AI job orchestration (Redis) |
+- Jira only via `JIRA_SERVICE_URL` → `app/adapters/jira_service_client.py`.
+- Reuse `app.state.http_session` — no new `ClientSession` per request.
+- Every CMS endpoint: RBAC + team scope (`cms_team_access`).
+- Domain logic in `app/domain/`, not in route handlers.
 
 ## Tests
 
 ```bash
 PYTHONPATH=. python -m pytest -q
+PYTHONPATH=. python -m compileall -q services app config.py session_store.py
 ```
 
-From dev repo: `make backend-test`.
+From `planning-poker-dev`: `make voting-test` or `make check`.
+
+CI runs pytest, `compileall`, `docker build`, and `import planning_poker_common` in the image. Push to `main` deploys via GitHub Actions (SSH).
+
+## Related repos
+
+- [planning-poker-dev](https://github.com/shulzpavel/planning-poker-dev) — compose & deploy
+- [planning-poker-jira-service](https://github.com/shulzpavel/planning-poker-jira-service) — Jira adapter
+- [planning-poker-web](https://github.com/shulzpavel/planning-poker-web) — UI
+- [planning-poker-python-lib](https://github.com/shulzpavel/planning-poker-python-lib) — shared pure modules
