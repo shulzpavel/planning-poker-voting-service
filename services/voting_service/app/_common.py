@@ -1,7 +1,7 @@
-"""Backward-compatible shim — app routes live in ``services.voting_service.app``."""
+"""Shared app API router, models, and helpers."""
 
-from services.voting_service._http_shared import (
-    _audit,
+from __future__ import annotations
+
     _ensure_current_task_description,
     _get_repo_session,
     _mutate_repo_session,
