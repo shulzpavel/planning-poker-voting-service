@@ -28,8 +28,12 @@ def test_validate_participant_email_accepts_betboom_when_env_empty(monkeypatch: 
     import services.voting_service.participant_identity as mod
 
     importlib.reload(mod)
-    assert mod.PARTICIPANT_EMAIL_DOMAIN == "betboom.com"
-    assert mod.validate_participant_email("paul_s@betboom.com") == "paul_s@betboom.com"
+    try:
+        assert mod.PARTICIPANT_EMAIL_DOMAIN == "betboom.com"
+        assert mod.validate_participant_email("paul_s@betboom.com") == "paul_s@betboom.com"
+    finally:
+        monkeypatch.delenv("WEB_PARTICIPANT_EMAIL_DOMAIN", raising=False)
+        importlib.reload(mod)
     assert validate_participant_role("backend") == "backend"
     assert validate_participant_role("frontend") == "frontend"
     assert validate_participant_role("qa") == "qa"
