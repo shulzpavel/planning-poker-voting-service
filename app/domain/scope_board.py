@@ -96,13 +96,8 @@ def _jira_role_assignees(raw: dict[str, Any]) -> dict[str, str]:
 
 
 def jira_role_fields_configured() -> dict[str, bool]:
-    from config import JIRA_BACK_ASSIGNEE_FIELD, JIRA_FRONT_ASSIGNEE_FIELD, JIRA_QA_ASSIGNEE_FIELD
-
-    return {
-        "front": bool(JIRA_FRONT_ASSIGNEE_FIELD),
-        "back": bool(JIRA_BACK_ASSIGNEE_FIELD),
-        "qa": bool(JIRA_QA_ASSIGNEE_FIELD),
-    }
+    """Default when no jira-service fetch merged yet; live values come from scope refresh API."""
+    return {"front": False, "back": False, "qa": False}
 
 
 def merge_jira_role_fields_configured(*sources: dict[str, Any] | None) -> dict[str, bool]:

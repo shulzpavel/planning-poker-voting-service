@@ -98,28 +98,7 @@ __all__ = ["app_router", "_publish_state"]
 
 DEMO_CHAT_ID = -42_424_242
 DEMO_TITLE = "Demo planning session"
-DEMO_TASKS = [
-    {
-        "jira_key": "DEMO-101",
-        "summary": "Add manager-led planning room with live participant lobby",
-        "story_points": None,
-    },
-    {
-        "jira_key": "DEMO-102",
-        "summary": "Import Jira backlog and support manual task editing",
-        "story_points": None,
-    },
-    {
-        "jira_key": "DEMO-103",
-        "summary": "Polish mobile voting flow for planning poker participants",
-        "story_points": None,
-    },
-    {
-        "jira_key": "DEMO-104",
-        "summary": "Write final Story Points back to Jira after team discussion",
-        "story_points": None,
-    },
-]
+DEMO_JQL = "project = DEMO ORDER BY priority DESC"
 
 
 class AppSessionCreateRequest(BaseModel):
@@ -620,6 +599,19 @@ async def create_demo_session(request: Request, reset: bool = Query(default=Fals
     if not _demo_enabled():
         raise HTTPException(status_code=404, detail="Demo session is disabled")
 
+    from app.adapters.jira_service_client import JiraServiceHttpClient
+
+    jira_client = JiraServiceHttpClient()
+    try:
+        demo_rows = await jira_client.parse_jira_request(DEMO_JQL, max_results=20)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=f"Demo tasks unavailable: {exc}") from exc
+    finally:
+        await jira_client.close()
+
+    if not demo_rows:
+        raise HTTPException(status_code=503, detail="No demo tasks returned from jira-service")
+
     chat_id = DEMO_CHAT_ID
     topic_id = None
     repo = request.app.state.repository
@@ -635,17 +627,17 @@ async def create_demo_session(request: Request, reset: bool = Query(default=Fals
         # Do not treat that as "already imported" — only skip keys already queued.
         if not session.tasks_queue:
             queued_keys = {task.jira_key for task in session.tasks_queue if task.jira_key}
-            for item in DEMO_TASKS:
-                key = item["jira_key"]
+            for item in demo_rows:
+                key = item["key"]
                 if key in queued_keys:
                     continue
                 session.tasks_queue.append(
                     Task(
                         jira_key=key,
                         summary=item["summary"],
-                        story_points=item["story_points"],
+                        story_points=item.get("story_points") or None,
                         source="jira",
-                        jql="project = DEMO ORDER BY priority DESC",
+                        jql=DEMO_JQL,
                     )
                 )
                 queued_keys.add(key)
