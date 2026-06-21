@@ -1,27 +1,21 @@
-"""CMS store mixin: rbac."""
+"""CMS store mixin: admin auth, roles, and permissions."""
 
 from __future__ import annotations
 
+import json
 from typing import Any, Optional
 
 import asyncpg
 
-from services.voting_service.cms_rbac import verify_password
-
-from services.voting_service.cms_store._helpers import (
-    _row_to_dict,
-    _team_row,
-    clamp_limit,
-    decode_cursor,
-    encode_cursor,
-)
+from services.voting_service.cms_rbac import hash_password, verify_password
+from services.voting_service.cms_store._helpers import _row_to_dict, _team_row
 
 
 class RBACMixin:
-    """Mixin for PostgresCmsStore."""
+    """Admin accounts, RBAC roles, and permission helpers."""
 
     async def verify_admin_login(self, username: str, password: str) -> Optional[dict[str, Any]]:
-        async with self._pool.acquire() as conn:
+        async with self.pool.acquire() as conn:
             row = await conn.fetchrow(
                 """
                 SELECT id, username, password_hash, is_active
@@ -45,7 +39,7 @@ class RBACMixin:
         admin_id: Optional[int] = None,
         username: Optional[str] = None,
     ) -> Optional[dict[str, Any]]:
-        async with self._pool.acquire() as conn:
+        async with self.pool.acquire() as conn:
             row = await conn.fetchrow(
                 """
                 SELECT id, username, display_name,
@@ -125,7 +119,7 @@ class RBACMixin:
         """Persist the admin's theme choice. Returns True if the account exists and is active."""
         if theme_preference not in ("dark", "light", "system"):
             raise ValueError(f"invalid theme_preference: {theme_preference!r}")
-        async with self._pool.acquire() as conn:
+        async with self.pool.acquire() as conn:
             result = await conn.execute(
                 """
                 UPDATE cms_admin_accounts
@@ -143,7 +137,7 @@ class RBACMixin:
         return affected > 0
 
     async def list_cms_permissions(self) -> list[dict[str, Any]]:
-        async with self._pool.acquire() as conn:
+        async with self.pool.acquire() as conn:
             rows = await conn.fetch(
                 """
                 SELECT key, label, description
@@ -154,7 +148,7 @@ class RBACMixin:
         return [_row_to_dict(row) for row in rows]
 
     async def list_cms_pages(self) -> list[dict[str, Any]]:
-        async with self._pool.acquire() as conn:
+        async with self.pool.acquire() as conn:
             rows = await conn.fetch(
                 """
                 SELECT key, label, path, permission_key, sort_order, is_enabled
@@ -165,7 +159,7 @@ class RBACMixin:
         return [_row_to_dict(row) for row in rows]
 
     async def list_cms_roles(self) -> list[dict[str, Any]]:
-        async with self._pool.acquire() as conn:
+        async with self.pool.acquire() as conn:
             rows = await conn.fetch(
                 """
                 SELECT id, key, name, description, is_system, created_at, updated_at
@@ -198,7 +192,7 @@ class RBACMixin:
         permission_keys: list[str],
     ) -> dict[str, Any]:
         clean_permissions = await self._valid_permission_keys(permission_keys)
-        async with self._pool.acquire() as conn:
+        async with self.pool.acquire() as conn:
             async with conn.transaction():
                 role_id = await conn.fetchval(
                     """
@@ -221,7 +215,7 @@ class RBACMixin:
         permission_keys: list[str],
     ) -> Optional[dict[str, Any]]:
         clean_permissions = await self._valid_permission_keys(permission_keys)
-        async with self._pool.acquire() as conn:
+        async with self.pool.acquire() as conn:
             async with conn.transaction():
                 updated = await conn.fetchrow(
                     """
@@ -240,7 +234,7 @@ class RBACMixin:
         return await self.get_cms_role(role_id)
 
     async def get_cms_role(self, role_id: int) -> dict[str, Any]:
-        async with self._pool.acquire() as conn:
+        async with self.pool.acquire() as conn:
             row = await conn.fetchrow(
                 """
                 SELECT id, key, name, description, is_system, created_at, updated_at
@@ -314,7 +308,7 @@ class RBACMixin:
         cursor_id = cur.get("id")
         clean_q = q.strip().lower() if q and q.strip() else None
         pattern = f"{clean_q}%" if clean_q else None
-        async with self._pool.acquire() as conn:
+        async with self.pool.acquire() as conn:
             rows = await conn.fetch(
                 """
                 SELECT id, username, display_name, is_active,
@@ -392,7 +386,7 @@ class RBACMixin:
         return {"items": admins, "next_cursor": next_cursor, "limit": limit}
 
     async def list_all_cms_admins(self) -> list[dict[str, Any]]:
-        async with self._pool.acquire() as conn:
+        async with self.pool.acquire() as conn:
             rows = await conn.fetch(
                 """
                 SELECT id, username, display_name, is_active,
@@ -432,7 +426,7 @@ class RBACMixin:
         return admins
 
     async def get_cms_admin_account(self, admin_id: int) -> Optional[dict[str, Any]]:
-        async with self._pool.acquire() as conn:
+        async with self.pool.acquire() as conn:
             row = await conn.fetchrow(
                 """
                 SELECT id, username, display_name, is_active,
@@ -479,7 +473,7 @@ class RBACMixin:
         role_ids: list[int],
         team_ids: Optional[list[int]] = None,
     ) -> dict[str, Any]:
-        async with self._pool.acquire() as conn:
+        async with self.pool.acquire() as conn:
             async with conn.transaction():
                 admin_id = await conn.fetchval(
                     """
@@ -509,7 +503,7 @@ class RBACMixin:
         *,
         update_teams: bool = False,
     ) -> Optional[dict[str, Any]]:
-        async with self._pool.acquire() as conn:
+        async with self.pool.acquire() as conn:
             async with conn.transaction():
                 if password:
                     row = await conn.fetchrow(
@@ -553,7 +547,7 @@ class RBACMixin:
         if not permission_keys:
             return []
         unique_keys = sorted(set(permission_keys))
-        async with self._pool.acquire() as conn:
+        async with self.pool.acquire() as conn:
             rows = await conn.fetch(
                 """
                 SELECT key
@@ -600,3 +594,4 @@ class RBACMixin:
                 """,
                 [(admin_id, role_id) for role_id in sorted(set(role_ids))],
             )
+

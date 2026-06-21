@@ -1,24 +1,15 @@
-"""CMS store mixin: scope boards."""
+"""CMS store mixin: monthly scope boards."""
 
 from __future__ import annotations
 
 import json
-import uuid
 from typing import Any, Optional
 
-from app.domain.scope_flow_pace import apply_flow_pace_chart_order, normalize_flow_pace_chart_order
-
-from services.voting_service.cms_store._helpers import (
-    _decode_jsonb,
-    _scope_board_row,
-    clamp_limit,
-    decode_cursor,
-    encode_cursor,
-)
+from services.voting_service.cms_store._helpers import _scope_board_row
 
 
 class ScopeBoardsMixin:
-    """Mixin for PostgresCmsStore."""
+    """Scope board CRUD and snapshot updates."""
 
     async def list_scope_boards(
         self,
@@ -34,7 +25,7 @@ class ScopeBoardsMixin:
             if sort_team
             else "b.updated_at DESC, b.id DESC"
         )
-        async with self._pool.acquire() as conn:
+        async with self.pool.acquire() as conn:
             rows = await conn.fetch(
                 f"""
                 {self._SCOPE_BOARD_LIST_SELECT}
@@ -49,7 +40,7 @@ class ScopeBoardsMixin:
         return [_scope_board_row(row) for row in rows]
 
     async def get_scope_board(self, board_id: int) -> Optional[dict[str, Any]]:
-        async with self._pool.acquire() as conn:
+        async with self.pool.acquire() as conn:
             row = await conn.fetchrow(
                 self._SCOPE_BOARD_SELECT + " WHERE b.id = $1",
                 board_id,
@@ -84,7 +75,7 @@ class ScopeBoardsMixin:
         created_by: Optional[int] = None,
         team_id: Optional[int] = None,
     ) -> dict[str, Any]:
-        async with self._pool.acquire() as conn:
+        async with self.pool.acquire() as conn:
             row = await conn.fetchrow(
                 """
                 INSERT INTO cms_scope_boards
@@ -152,7 +143,7 @@ class ScopeBoardsMixin:
         plan_epic_key: str = "",
         scope_sections: Optional[list[dict[str, Any]]] = None,
     ) -> Optional[dict[str, Any]]:
-        async with self._pool.acquire() as conn:
+        async with self.pool.acquire() as conn:
             updated = await conn.fetchrow(
                 """
                 UPDATE cms_scope_boards
@@ -219,7 +210,7 @@ class ScopeBoardsMixin:
         next_release_comment: str = "",
         custom_release_comment: str = "",
     ) -> Optional[dict[str, Any]]:
-        async with self._pool.acquire() as conn:
+        async with self.pool.acquire() as conn:
             updated = await conn.fetchrow(
                 """
                 UPDATE cms_scope_boards
@@ -256,7 +247,7 @@ class ScopeBoardsMixin:
             if not key:
                 raise ValueError("layout_order items must be non-empty strings")
             cleaned.append(key)
-        async with self._pool.acquire() as conn:
+        async with self.pool.acquire() as conn:
             updated = await conn.fetchrow(
                 """
                 UPDATE cms_scope_boards
@@ -287,7 +278,7 @@ class ScopeBoardsMixin:
                 raise ValueError("chart_order items must be non-empty strings")
             cleaned.append(key)
         normalized = normalize_flow_pace_chart_order(cleaned)
-        async with self._pool.acquire() as conn:
+        async with self.pool.acquire() as conn:
             updated = await conn.fetchrow(
                 """
                 UPDATE cms_scope_boards
@@ -307,7 +298,7 @@ class ScopeBoardsMixin:
         board_id: int,
         snapshot: dict[str, Any],
     ) -> Optional[dict[str, Any]]:
-        async with self._pool.acquire() as conn:
+        async with self.pool.acquire() as conn:
             updated = await conn.fetchrow(
                 """
                 UPDATE cms_scope_boards
@@ -338,7 +329,7 @@ class ScopeBoardsMixin:
             "summary": str(ai_summary.get("summary") or "")[:400],
             "analysis": ai_summary,
         }
-        async with self._pool.acquire() as conn:
+        async with self.pool.acquire() as conn:
             row = await conn.fetchrow(
                 "SELECT ai_summary_history FROM cms_scope_boards WHERE id = $1",
                 board_id,
@@ -366,7 +357,7 @@ class ScopeBoardsMixin:
         return await self.get_scope_board(board_id)
 
     async def get_scope_board_ai_jira_export(self, board_id: int) -> Optional[dict[str, Any]]:
-        async with self._pool.acquire() as conn:
+        async with self.pool.acquire() as conn:
             row = await conn.fetchrow(
                 """
                 SELECT ai_summary->'jira_export' AS jira_export,
@@ -389,7 +380,7 @@ class ScopeBoardsMixin:
         board_id: int,
         jira_export: dict[str, Any],
     ) -> Optional[dict[str, Any]]:
-        async with self._pool.acquire() as conn:
+        async with self.pool.acquire() as conn:
             row = await conn.fetchrow(
                 "SELECT ai_summary FROM cms_scope_boards WHERE id = $1",
                 board_id,
@@ -417,9 +408,12 @@ class ScopeBoardsMixin:
         return await self.get_scope_board(board_id)
 
     async def delete_scope_board(self, board_id: int) -> bool:
-        async with self._pool.acquire() as conn:
+        async with self.pool.acquire() as conn:
             row = await conn.fetchrow(
                 "DELETE FROM cms_scope_boards WHERE id = $1 RETURNING id",
                 board_id,
             )
         return row is not None
+
+    # -- retrospectives --------------------------------------------------
+

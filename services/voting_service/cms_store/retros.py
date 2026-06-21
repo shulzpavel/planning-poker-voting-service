@@ -1,20 +1,15 @@
-"""CMS store mixin: retros."""
+"""CMS store mixin: retrospective boards."""
 
 from __future__ import annotations
 
 import json
 from typing import Any, Optional
 
-from services.voting_service.cms_store._helpers import (
-    _retro_row,
-    clamp_limit,
-    decode_cursor,
-    encode_cursor,
-)
+from services.voting_service.cms_store._helpers import _retro_row
 
 
 class RetrosMixin:
-    """Mixin for PostgresCmsStore."""
+    """Retrospective CRUD and status transitions."""
 
     async def list_retros(
         self,
@@ -30,7 +25,7 @@ class RetrosMixin:
             if sort_team
             else "r.updated_at DESC, r.id DESC"
         )
-        async with self._pool.acquire() as conn:
+        async with self.pool.acquire() as conn:
             rows = await conn.fetch(
                 self._RETRO_SELECT
                 + f"""
@@ -45,7 +40,7 @@ class RetrosMixin:
         return [_retro_row(row) for row in rows]
 
     async def get_retro(self, retro_id: int) -> Optional[dict[str, Any]]:
-        async with self._pool.acquire() as conn:
+        async with self.pool.acquire() as conn:
             row = await conn.fetchrow(self._RETRO_SELECT + " WHERE r.id = $1", retro_id)
         return _retro_row(row) if row else None
 
@@ -56,7 +51,7 @@ class RetrosMixin:
         created_by: Optional[int],
         team_id: Optional[int] = None,
     ) -> dict[str, Any]:
-        async with self._pool.acquire() as conn:
+        async with self.pool.acquire() as conn:
             row = await conn.fetchrow(
                 """
                 INSERT INTO cms_retros (title, config, status, created_by, team_id)
@@ -78,7 +73,7 @@ class RetrosMixin:
         title: str,
         config: dict[str, Any],
     ) -> Optional[dict[str, Any]]:
-        async with self._pool.acquire() as conn:
+        async with self.pool.acquire() as conn:
             updated = await conn.fetchrow(
                 """
                 UPDATE cms_retros
@@ -95,7 +90,7 @@ class RetrosMixin:
         return await self.get_retro(retro_id)
 
     async def update_retro_status(self, retro_id: int, status: str) -> Optional[dict[str, Any]]:
-        async with self._pool.acquire() as conn:
+        async with self.pool.acquire() as conn:
             updated = await conn.fetchrow(
                 "UPDATE cms_retros SET status = $2, updated_at = NOW() WHERE id = $1 RETURNING id",
                 retro_id,
@@ -111,7 +106,7 @@ class RetrosMixin:
         snapshot: dict[str, Any],
         status: Optional[str] = None,
     ) -> Optional[dict[str, Any]]:
-        async with self._pool.acquire() as conn:
+        async with self.pool.acquire() as conn:
             updated = await conn.fetchrow(
                 """
                 UPDATE cms_retros
@@ -134,7 +129,7 @@ class RetrosMixin:
         retro_id: int,
         ai_summary: dict[str, Any],
     ) -> Optional[dict[str, Any]]:
-        async with self._pool.acquire() as conn:
+        async with self.pool.acquire() as conn:
             updated = await conn.fetchrow(
                 "UPDATE cms_retros SET ai_summary = $2::jsonb, updated_at = NOW() WHERE id = $1 RETURNING id",
                 retro_id,
@@ -145,9 +140,10 @@ class RetrosMixin:
         return await self.get_retro(retro_id)
 
     async def delete_retro(self, retro_id: int) -> bool:
-        async with self._pool.acquire() as conn:
+        async with self.pool.acquire() as conn:
             row = await conn.fetchrow(
                 "DELETE FROM cms_retros WHERE id = $1 RETURNING id",
                 retro_id,
             )
         return row is not None
+

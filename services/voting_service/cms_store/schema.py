@@ -1,7 +1,8 @@
-"""CMS store mixin: schema."""
+"""CMS store mixin: schema bootstrap and migrations."""
 
 from __future__ import annotations
 
+import json
 import os
 
 import asyncpg
@@ -23,7 +24,10 @@ from services.voting_service.cms_rbac import (
 
 
 class SchemaMixin:
-    """Mixin for PostgresCmsStore."""
+    """Pool lifecycle, DDL, and access-control seed data."""
+
+    def __init__(self, pool: asyncpg.Pool):
+        self.pool = pool
 
     @classmethod
     async def create(cls, dsn: str) -> "PostgresCmsStore":
@@ -35,7 +39,7 @@ class SchemaMixin:
         return store
 
     async def ensure_schema(self) -> None:
-        async with self._pool.acquire() as conn:
+        async with self.pool.acquire() as conn:
             await conn.execute(
                 """
                 CREATE EXTENSION IF NOT EXISTS pg_trgm;
@@ -442,7 +446,7 @@ class SchemaMixin:
         )
 
     async def ensure_access_defaults(self, bootstrap_username: str, bootstrap_password: str) -> None:
-        async with self._pool.acquire() as conn:
+        async with self.pool.acquire() as conn:
             async with conn.transaction():
                 for permission in CMS_PERMISSION_DEFINITIONS:
                     await conn.execute(
@@ -595,4 +599,4 @@ class SchemaMixin:
         return int(role_id)
 
     async def close(self) -> None:
-        await self._pool.close()
+        await self.pool.close()

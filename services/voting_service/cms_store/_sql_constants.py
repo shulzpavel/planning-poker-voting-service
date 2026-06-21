@@ -12,7 +12,6 @@ class SqlConstantsMixin:
                a.username AS created_by_username,
                a.display_name AS created_by_display_name
     """
-
     _SCOPE_BOARD_SELECT = """
         SELECT b.id, b.name, b.month, b.capacity_sp, b.capacity_sp_dev, b.capacity_sp_test,
                b.workload_mode, b.plan_jql, b.unplan_jql,
@@ -56,7 +55,6 @@ class SqlConstantsMixin:
         LEFT JOIN cms_teams t ON t.id = b.team_id
         LEFT JOIN cms_admin_accounts a ON a.id = b.created_by
     """
-
     _RETRO_SELECT = """
         SELECT r.id, r.title, r.status, r.config, r.snapshot, r.ai_summary,
                r.created_by, r.created_at, r.updated_at, r.team_id,
@@ -67,7 +65,6 @@ class SqlConstantsMixin:
         LEFT JOIN cms_teams t ON t.id = r.team_id
         LEFT JOIN cms_admin_accounts a ON a.id = r.created_by
     """
-
     _SESSION_SCOPE = """
         ($1::boolean OR s.team_id IS NULL OR s.team_id = ANY($2::bigint[]))
         AND ($3::bigint IS NULL OR s.team_id IS NOT DISTINCT FROM $3)
