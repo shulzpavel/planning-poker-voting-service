@@ -16,10 +16,7 @@ import re
 import uuid
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
-from typing import TYPE_CHECKING, Any, Optional
-
-if TYPE_CHECKING:
-    from services.voting_service.cms_store import PostgresCmsStore
+from typing import Any, Optional
 
 import asyncpg
 
@@ -356,4 +353,5 @@ async def backfill_cms_from_redis(redis_client, cms_store: "PostgresCmsStore") -
         )
     except Exception as exc:
         logger.warning("CMS Redis backfill failed: %s", exc)
+
 
