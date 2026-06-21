@@ -28,7 +28,7 @@ from services.voting_service.cms_rbac import (
     PERM_TASKS_MANAGE,
 )
 from services.voting_service.cms_store import DEFAULT_LIMIT, MAX_LIMIT
-from services.voting_service.cms_team_access import assert_record_access
+from services.voting_service.cms_team_access import assert_record_access, team_scope
 from services.voting_service.session_finish_notify import maybe_notify_session_finished
 from services.voting_service._http_shared import (
     CmsPrincipal,
