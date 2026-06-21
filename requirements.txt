@@ -1,3 +1,4 @@
+planning-poker-common @ git+https://github.com/shulzpavel/planning-poker-python-lib@v0.1.2
 python-dotenv
 aiohttp>=3.9.0
 asyncpg>=0.29.0
