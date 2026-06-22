@@ -60,10 +60,88 @@ from services.voting_service._http_shared import (
     _get_redis,
     require_permission,
 )
+from planning_poker_common.scope.team_questions import (
+    extract_team_scope_questions_from_snapshot,
+    manual_question_with_release_meta,
+    merge_team_scope_questions_into_snapshot,
+    register_open_jira_questions,
+    resolved_question_with_release_meta,
+    snapshot_open_jira_question_ids,
+    team_scope_questions_empty,
+)
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+def _is_release_scope_team(board: dict[str, Any]) -> bool:
+    team = board.get("team") or {}
+    return infer_scope_report_type(team.get("slug")) == "release"
+
+
+def _board_release_label(board: dict[str, Any], snapshot: dict[str, Any] | None = None) -> str:
+    snap = snapshot if snapshot is not None else (board.get("snapshot") or {})
+    release_context = snap.get("release_context") or {}
+    current = release_context.get("current") or {}
+    version_meta = current.get("version_meta") or {}
+    for candidate in (
+        version_meta.get("name"),
+        current.get("version_name"),
+        current.get("label"),
+        board.get("name"),
+    ):
+        cleaned = str(candidate or "").strip()
+        if cleaned:
+            return cleaned
+    return "Релиз"
+
+
+async def _ensure_team_scope_questions(store: Any, team_id: int) -> dict[str, Any]:
+    questions = await store.get_team_scope_questions(team_id)
+    if team_scope_questions_empty(questions):
+        backfilled = await store.backfill_team_scope_questions_from_boards(team_id)
+        if not team_scope_questions_empty(backfilled):
+            await store.save_team_scope_questions(team_id, backfilled)
+            return backfilled
+    return questions
+
+
+async def _apply_release_team_questions(store: Any, board: dict[str, Any]) -> dict[str, Any]:
+    if not _is_release_scope_team(board):
+        return board
+    team_id = board.get("team_id")
+    if not team_id:
+        return board
+    snapshot = board.get("snapshot")
+    if not isinstance(snapshot, dict):
+        snapshot = {
+            "plan_issues": [],
+            "unplan_issues": [],
+            "metrics": {},
+            "refreshed_at": datetime.now(timezone.utc).isoformat(),
+        }
+    team_questions = await _ensure_team_scope_questions(store, int(team_id))
+    open_ids = snapshot_open_jira_question_ids(snapshot)
+    registered = register_open_jira_questions(
+        team_questions,
+        question_ids=open_ids,
+        release_name=_board_release_label(board, snapshot),
+    )
+    if registered != team_questions:
+        await store.save_team_scope_questions(int(team_id), registered)
+        team_questions = registered
+    merged = merge_team_scope_questions_into_snapshot(snapshot, team_questions, open_jira_ids=open_ids)
+    return {**board, "snapshot": merged}
+
+
+async def _sync_release_team_questions(store: Any, board: dict[str, Any], snapshot: dict[str, Any]) -> None:
+    if not _is_release_scope_team(board):
+        return
+    team_id = board.get("team_id")
+    if not team_id:
+        return
+    await store.save_team_scope_questions(int(team_id), extract_team_scope_questions_from_snapshot(snapshot))
 
 
 class ScopeSectionConfigRequest(BaseModel):
@@ -807,17 +885,30 @@ def _scope_snapshot_with_manual_question(
     text: str,
     actor_name: str,
     created_at: str,
+    release_name: str = "",
 ) -> dict[str, Any]:
     updated = _snapshot_shallow_copy(snapshot)
     manual = list(updated.get("manual_questions") or [])
-    manual.append(
-        {
-            "id": f"manual-{secrets.token_hex(6)}",
-            "summary": text,
-            "created_by": actor_name,
-            "created_at": created_at,
-        }
-    )
+    question_id = f"manual-{secrets.token_hex(6)}"
+    if release_name.strip():
+        manual.append(
+            manual_question_with_release_meta(
+                text=text,
+                actor_name=actor_name,
+                question_id=question_id,
+                release_name=release_name,
+                created_at=created_at,
+            )
+        )
+    else:
+        manual.append(
+            {
+                "id": question_id,
+                "summary": text,
+                "created_by": actor_name,
+                "created_at": created_at,
+            }
+        )
     updated["manual_questions"] = manual
     return updated
 
@@ -936,11 +1027,13 @@ def _scope_snapshot_with_resolved_question(
     comment: str,
     actor_name: str,
     resolved_at: str,
+    release_name: str = "",
 ) -> dict[str, Any]:
     updated = _snapshot_shallow_copy(snapshot)
     target = _scope_question_id(question_id)
     manual = []
     resolved_source: Optional[dict[str, Any]] = None
+    question_meta = updated.get("question_meta") or {}
 
     for question in updated.get("manual_questions") or []:
         if str(question.get("id") or "") == target:
@@ -997,18 +1090,40 @@ def _scope_snapshot_with_resolved_question(
     if resolved_source is None:
         raise HTTPException(status_code=404, detail="Question not found in scope board snapshot")
 
+    tracked_meta = question_meta.get(target) if isinstance(question_meta, dict) else None
+    if isinstance(tracked_meta, dict):
+        resolved_source = {**resolved_source, "_tracked_meta": tracked_meta}
+
     updated["manual_questions"] = manual
     resolved = list(updated.get("resolved_questions") or [])
-    resolved.append(
-        {
-            **resolved_source,
-            "id": target,
-            "comment": comment,
-            "resolved_by": actor_name,
-            "resolved_at": resolved_at,
-        }
-    )
-    updated["resolved_questions"] = resolved[-100:]
+    if release_name.strip():
+        resolved.append(
+            resolved_question_with_release_meta(
+                resolved_source,
+                question_id=target,
+                comment=comment,
+                actor_name=actor_name,
+                release_name=release_name,
+                resolved_at=resolved_at,
+            )
+        )
+    else:
+        resolved.append(
+            {
+                **{key: value for key, value in resolved_source.items() if key != "_tracked_meta"},
+                "id": target,
+                "comment": comment,
+                "resolved_by": actor_name,
+                "resolved_at": resolved_at,
+            }
+        )
+    if isinstance(question_meta, dict) and target in question_meta:
+        next_meta = dict(question_meta)
+        next_meta.pop(target, None)
+        updated["question_meta"] = next_meta
+    updated["resolved_questions"] = sorted(resolved, key=lambda item: str(item.get("resolved_at") or ""), reverse=True)[
+        :100
+    ]
     sections = updated.get("sections") or []
     if sections:
         updated["report"] = compute_scope_report_from_sections(sections)
@@ -1063,6 +1178,9 @@ async def cms_create_scope_board(
         team_id=resolved_team_id,
         **payload,
     )
+    board = await _apply_release_team_questions(store, board)
+    if _is_release_scope_team(board) and isinstance(board.get("snapshot"), dict):
+        board = await store.save_scope_board_snapshot(int(board["id"]), board["snapshot"]) or board
     await _audit(
         request,
         "cms.scope_board.create",
@@ -1070,7 +1188,7 @@ async def cms_create_scope_board(
         "ok",
         {"board_id": board["id"], "name": board["name"]},
     )
-    return board
+    return await _apply_release_team_questions(store, board)
 
 
 @router.get("/cms/scope-boards/{board_id}")
@@ -1079,11 +1197,12 @@ async def cms_get_scope_board(
     request: Request,
     actor: CmsPrincipal = Depends(require_permission(PERM_PLANNER_VIEW)),
 ) -> dict:
-    board = await _get_cms_store(request).get_scope_board(board_id)
+    store = _get_cms_store(request)
+    board = await store.get_scope_board(board_id)
     if not board:
         raise HTTPException(status_code=404, detail="Scope board not found")
     assert_record_access(actor, board)
-    return board
+    return await _apply_release_team_questions(store, board)
 
 
 @router.get("/cms/scope-boards/{board_id}/ai-summary/jira-export")
@@ -1380,8 +1499,21 @@ async def cms_refresh_scope_board(
         snapshot.get("jira_role_fields_configured"),
         *[outcome.jira_role_fields_configured for outcome in fetch_outcomes],
     )
-    snapshot["manual_questions"] = previous_snapshot.get("manual_questions") or []
-    snapshot["resolved_questions"] = previous_snapshot.get("resolved_questions") or []
+    if _is_release_scope_team(existing) and existing.get("team_id"):
+        release_store = _get_cms_store(request)
+        team_questions = await _ensure_team_scope_questions(release_store, int(existing["team_id"]))
+        open_ids = snapshot_open_jira_question_ids(snapshot)
+        team_questions = register_open_jira_questions(
+            team_questions,
+            question_ids=open_ids,
+            release_name=_board_release_label(existing, snapshot),
+            registered_at=refreshed_at,
+        )
+        await release_store.save_team_scope_questions(int(existing["team_id"]), team_questions)
+        snapshot = merge_team_scope_questions_into_snapshot(snapshot, team_questions, open_jira_ids=open_ids)
+    else:
+        snapshot["manual_questions"] = previous_snapshot.get("manual_questions") or []
+        snapshot["resolved_questions"] = previous_snapshot.get("resolved_questions") or []
     snapshot["top_items"] = previous_snapshot.get("top_items") or []
     snapshot["todo_items"] = previous_snapshot.get("todo_items") or []
     snapshot["report_comments"] = previous_snapshot.get("report_comments") or {}
@@ -1551,15 +1683,20 @@ async def cms_add_scope_manual_question(
         "refreshed_at": datetime.now(timezone.utc).isoformat(),
     }
     actor_name = actor.display_name or actor.username
+    created_at = datetime.now(timezone.utc).isoformat()
+    release_name = _board_release_label(existing, snapshot) if _is_release_scope_team(existing) else ""
     next_snapshot = _scope_snapshot_with_manual_question(
         snapshot,
         text=body.text.strip(),
         actor_name=actor_name,
-        created_at=datetime.now(timezone.utc).isoformat(),
+        created_at=created_at,
+        release_name=release_name,
     )
-    board = await _get_cms_store(request).save_scope_board_snapshot(board_id, next_snapshot)
+    store = _get_cms_store(request)
+    board = await store.save_scope_board_snapshot(board_id, next_snapshot)
     if not board:
         raise HTTPException(status_code=404, detail="Scope board not found")
+    await _sync_release_team_questions(store, existing, next_snapshot)
     await _audit(
         request,
         "cms.scope_board.question_create",
@@ -1757,16 +1894,21 @@ async def cms_resolve_scope_question(
         await _post_jira_issue_comment(question_id, cleaned_comment)
 
     actor_name = actor.display_name or actor.username
+    resolved_at = datetime.now(timezone.utc).isoformat()
+    release_name = _board_release_label(existing, snapshot) if _is_release_scope_team(existing) else ""
     next_snapshot = _scope_snapshot_with_resolved_question(
         snapshot,
         question_id=question_id,
         comment=cleaned_comment,
         actor_name=actor_name,
-        resolved_at=datetime.now(timezone.utc).isoformat(),
+        resolved_at=resolved_at,
+        release_name=release_name,
     )
-    board = await _get_cms_store(request).save_scope_board_snapshot(board_id, next_snapshot)
+    store = _get_cms_store(request)
+    board = await store.save_scope_board_snapshot(board_id, next_snapshot)
     if not board:
         raise HTTPException(status_code=404, detail="Scope board not found")
+    await _sync_release_team_questions(store, existing, next_snapshot)
     await _audit(
         request,
         "cms.scope_board.question_resolve",
