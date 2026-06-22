@@ -352,6 +352,8 @@ class SchemaMixin:
             );
             CREATE INDEX IF NOT EXISTS idx_cms_teams_active_name
                 ON cms_teams(is_active, lower(name), id);
+            ALTER TABLE cms_teams
+                ADD COLUMN IF NOT EXISTS scope_questions JSONB NOT NULL DEFAULT '{"manual_questions":[],"resolved_questions":[],"tracked_jira":{}}'::jsonb;
 
             CREATE TABLE IF NOT EXISTS cms_admin_teams (
                 admin_id BIGINT NOT NULL REFERENCES cms_admin_accounts(id) ON DELETE CASCADE,
