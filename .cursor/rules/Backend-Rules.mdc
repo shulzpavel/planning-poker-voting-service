@@ -1,27 +1,45 @@
 ---
-description: Backend rules for voting-service
-alwaysApply: true
+description: planning-poker-voting-service backend rules for CMS, sessions, RBAC, scope, retro and AI
+globs: "app/**/*.py,services/**/*.py,tests/**/*.py,config.py,session_store.py,requirements.txt,pytest.ini"
+alwaysApply: false
 ---
 
-# Backend Rules — voting-service
+# Backend Rules - planning-poker-voting-service
 
 ## Scope
 
-- `app/**`
-- `services/**`
-- `tests/**`
-- `config.py`, `session_store.py`
+`planning-poker-voting-service` owns CMS/admin APIs, live sessions, participant web tokens, RBAC/team scope, scope boards, retrospectives, AI orchestration, rate limits and Telegram session finish alerts.
 
-## Rules
+It must not call Jira REST directly; Jira access goes through `JIRA_SERVICE_URL` and the existing Jira service adapter.
 
-- Do not change `web/` unless explicitly asked.
-- Preserve API behavior unless a breaking change is required.
-- Add or update tests for changed business logic.
+## Read Before Changing
 
-## Output
+- Service boundaries: `../planning-poker-dev/docs/architecture/SERVICES.md`.
+- Auth/RBAC: `../planning-poker-dev/docs/architecture/AUTH.md`.
+- Data/storage: `../planning-poker-dev/docs/architecture/DATA.md`.
+- API contracts: `../planning-poker-dev/docs/contracts/API.md`.
+- Scope board: `../planning-poker-dev/docs/contracts/SCOPE-BOARD.md`.
+- Sessions/voting: `../planning-poker-dev/docs/contracts/SESSIONS.md`.
+- Development practices: `../planning-poker-dev/docs/development/GUIDE.md`.
 
-1. Backend behavior implemented
-2. API changes
-3. Files changed
-4. Risks
-5. Tests to run
+## Implementation Rules
+
+- Keep routers thin; put business logic in `app/domain`, `app/usecases` or existing service modules.
+- Reuse existing ports/adapters, repositories, Pydantic models, error types, rate-limit helpers and test fixtures.
+- Preserve API behavior unless a breaking change is explicitly required and documented.
+- Every CMS endpoint needs authentication, permission check and team-scope/data access validation where applicable.
+- Use existing optimistic concurrency semantics for session mutations; do not silently overwrite state.
+- Reuse `app.state.http_session` for outbound HTTP; do not create per-request `ClientSession`.
+- Do not log secrets, tokens, cookies, auth headers or sensitive user data.
+- Preserve old snapshots/data on partial external dependency failure unless the contract explicitly says otherwise.
+
+## Testing
+
+- Changed business/domain/API logic requires pytest coverage in `tests/`.
+- Auth/RBAC/team-scope changes require negative tests.
+- Contract changes require tests for response shape, error path and frontend compatibility where relevant.
+- Run `python3 -m pytest -q` before commit/push.
+
+## Documentation
+
+Update `../planning-poker-dev/docs/**` when endpoints, auth, storage, env vars, rate limits, scope/session behavior or integration contracts change.
