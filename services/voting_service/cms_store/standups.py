@@ -187,6 +187,31 @@ class StandupsMixin:
                     return {"due_date": due, "meeting_date": meeting_iso}
         return None
 
+    async def find_previous_published_standup(
+        self,
+        *,
+        team_id: int,
+        before_meeting_date: date,
+        exclude_standup_id: Optional[int] = None,
+    ) -> Optional[dict[str, Any]]:
+        """Most recent published standup for the team before ``before_meeting_date``."""
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                f"""
+                {self._STANDUP_SELECT}
+                WHERE s.team_id = $1
+                  AND s.status = 'published'
+                  AND s.meeting_date < $2
+                  AND ($3::bigint IS NULL OR s.id <> $3)
+                ORDER BY s.meeting_date DESC, s.id DESC
+                LIMIT 1
+                """,
+                team_id,
+                before_meeting_date,
+                exclude_standup_id,
+            )
+        return _standup_row(row) if row else None
+
     async def get_standup(self, standup_id: int) -> Optional[dict[str, Any]]:
         async with self.pool.acquire() as conn:
             row = await conn.fetchrow(
@@ -299,6 +324,27 @@ class StandupsMixin:
                 """,
                 standup_id,
                 published_by,
+            )
+        if not updated:
+            return None
+        return await self.get_standup(standup_id)
+
+    async def save_standup_ai_summary(
+        self,
+        standup_id: int,
+        ai_summary: dict[str, Any],
+    ) -> Optional[dict[str, Any]]:
+        async with self.pool.acquire() as conn:
+            updated = await conn.fetchrow(
+                """
+                UPDATE cms_standups
+                SET ai_summary = $2::jsonb,
+                    updated_at = NOW()
+                WHERE id = $1
+                RETURNING id
+                """,
+                standup_id,
+                json.dumps(ai_summary),
             )
         if not updated:
             return None

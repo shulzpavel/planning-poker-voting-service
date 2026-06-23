@@ -472,6 +472,9 @@ class SchemaMixin:
                 ON cms_standups(team_id, meeting_date DESC, id DESC);
             CREATE INDEX IF NOT EXISTS idx_cms_standups_updated
                 ON cms_standups(updated_at DESC, id DESC);
+
+            ALTER TABLE cms_standups
+                ADD COLUMN IF NOT EXISTS ai_summary JSONB;
             """
         )
 

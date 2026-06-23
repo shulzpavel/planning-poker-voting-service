@@ -146,3 +146,42 @@ async def send_session_finish_document(
                 )
     except Exception as exc:  # noqa: BLE001
         logger.warning("Telegram sendDocument error: %r", exc)
+
+
+async def send_telegram_message(
+    http_session: Optional[aiohttp.ClientSession],
+    *,
+    text: str,
+    chat_id: Optional[str] = None,
+) -> bool:
+    """Best-effort Telegram text message. Returns True when API accepts the message."""
+    token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+    resolved_chat_id = (chat_id or os.getenv("TELEGRAM_CHAT_ID", "")).strip()
+    if not token or not resolved_chat_id:
+        logger.info("Telegram not configured; skipping message")
+        return False
+    if http_session is None:
+        logger.warning("http_session missing; skipping Telegram message")
+        return False
+
+    url = f"{TELEGRAM_API_BASE.format(token=token)}/sendMessage"
+    payload = {
+        "chat_id": resolved_chat_id,
+        "text": text,
+        "parse_mode": "HTML",
+        "disable_web_page_preview": "true",
+    }
+    try:
+        async with http_session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=15)) as response:
+            if response.status >= 400:
+                body = await response.text()
+                logger.warning(
+                    "Telegram sendMessage failed status=%s body=%s",
+                    response.status,
+                    body[:500],
+                )
+                return False
+            return True
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Telegram sendMessage error: %r", exc)
+        return False

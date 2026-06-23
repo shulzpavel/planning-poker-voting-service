@@ -12,6 +12,8 @@ from services.voting_service.ai_jobs import find_cached_scope_summary, run_phase
 from services.voting_service.ai_summary_llm import LlmSummaryError, fetch_jira_issue_context, generate_ai_summary_llm
 from services.voting_service.retro_ai_llm import LlmRetroError, generate_retro_analysis
 from services.voting_service.scope_ai_llm import LlmScopeError, generate_scope_analysis
+from services.voting_service.standup_ai_llm import LlmStandupError, generate_standup_analysis
+from services.voting_service.standup_publish_notify import maybe_notify_standup_published
 
 logger = logging.getLogger(__name__)
 
@@ -182,6 +184,65 @@ async def run_retro_ai_job(
         kind=kind,
         resource_key=resource_key,
         label=f"retro:{retro_id}",
+        runner=runner,
+    )
+
+
+async def run_standup_ai_job(
+    app,
+    *,
+    job_id: str,
+    standup_id: int,
+    actor_username: str,
+    force_refresh: bool = False,
+) -> None:
+    redis = app.state.web_redis
+    store = app.state.cms_store
+    http_session = app.state.http_session
+    kind = "standup"
+    resource_key = f"standup:{standup_id}:refresh" if force_refresh else f"standup:{standup_id}"
+
+    async def runner(set_phase: PhaseSetter) -> dict[str, Any]:
+        await set_phase("building_context")
+        standup = await store.get_standup(standup_id)
+        if not standup:
+            raise LlmStandupError("Standup not found", status_code=404)
+        if standup.get("status") != "published":
+            raise LlmStandupError("Сначала опубликуйте дейлик", status_code=409)
+
+        if standup.get("ai_summary") and not force_refresh:
+            return {"ai_summary": standup["ai_summary"], "standup_id": standup_id, "cached": True}
+
+        if http_session is None:
+            raise LlmStandupError("AI is not configured", status_code=503)
+
+        from services.voting_service.standup_ai_llm import load_previous_published_standup
+
+        previous_standup = await load_previous_published_standup(store, standup)
+
+        await set_phase("calling_llm")
+        summary = await generate_standup_analysis(http_session, standup, previous_standup=previous_standup)
+
+        await set_phase("validating")
+        await set_phase("saving")
+        updated = await store.save_standup_ai_summary(standup_id, summary)
+        if not updated:
+            raise LlmStandupError("Standup not found", status_code=404)
+
+        summary_with_tg = await maybe_notify_standup_published(http_session, standup=updated, ai_summary=summary)
+        if summary_with_tg.get("telegram_sent_at") and not summary.get("telegram_sent_at"):
+            updated = await store.save_standup_ai_summary(standup_id, summary_with_tg)
+            summary = summary_with_tg
+
+        logger.info("standup AI job ok standup_id=%s actor=%s", standup_id, actor_username)
+        return {"ai_summary": summary, "standup_id": standup_id, "cached": False}
+
+    await run_phased_job(
+        redis,
+        job_id,
+        kind=kind,
+        resource_key=resource_key,
+        label=f"standup:{standup_id}",
         runner=runner,
     )
 
