@@ -13,6 +13,16 @@ from planning_poker_common.scope.team_questions import (
 from services.voting_service.cms_store._helpers import _decode_jsonb, _team_row, normalize_team_slug
 
 
+class TeamDeleteBlockedError(Exception):
+    """Raised when a CMS team cannot be deleted yet."""
+
+    def __init__(self, reason: str, *, count: int = 0, message: str = ""):
+        self.reason = reason
+        self.count = count
+        self.message = message or reason
+        super().__init__(self.message)
+
+
 class TeamsMixin:
     """Team listing and mutation."""
 
@@ -95,6 +105,152 @@ class TeamsMixin:
                 is_active,
             )
         return _team_row(row) if row else None
+
+    async def delete_team(self, team_id: int) -> Optional[dict[str, Any]]:
+        """Delete a CMS team and detach linked records via FK rules.
+
+        - cms_sessions / cms_sprint_plans / cms_retros / cms_scope_boards → team_id NULL (legacy-shared)
+        - cms_admin_teams / cms_standup_rosters / cms_standups → CASCADE delete
+        - token_version bumped for admins who lose this team binding
+        """
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                row = await conn.fetchrow(
+                    """
+                    SELECT id, slug, name
+                    FROM cms_teams
+                    WHERE id = $1
+                    """,
+                    team_id,
+                )
+                if not row:
+                    return None
+
+                slug = str(row["slug"])
+                if slug == "default":
+                    raise TeamDeleteBlockedError(
+                        "default_team",
+                        message="Системную команду default удалить нельзя",
+                    )
+
+                active_sessions = int(
+                    await conn.fetchval(
+                        """
+                        SELECT COUNT(*)
+                        FROM cms_sessions
+                        WHERE team_id = $1
+                          AND deleted_at IS NULL
+                          AND is_active = TRUE
+                        """,
+                        team_id,
+                    )
+                    or 0
+                )
+                if active_sessions > 0:
+                    raise TeamDeleteBlockedError(
+                        "active_sessions",
+                        count=active_sessions,
+                        message=(
+                            f"Закройте {active_sessions} активных сессий "
+                            "перед удалением команды"
+                        ),
+                    )
+
+                live_retros = int(
+                    await conn.fetchval(
+                        """
+                        SELECT COUNT(*)
+                        FROM cms_retros
+                        WHERE team_id = $1
+                          AND status = 'live'
+                        """,
+                        team_id,
+                    )
+                    or 0
+                )
+                if live_retros > 0:
+                    raise TeamDeleteBlockedError(
+                        "live_retros",
+                        count=live_retros,
+                        message=(
+                            f"Завершите {live_retros} live-ретро "
+                            "перед удалением команды"
+                        ),
+                    )
+
+                detached = {
+                    "sessions": int(
+                        await conn.fetchval(
+                            "SELECT COUNT(*) FROM cms_sessions WHERE team_id = $1",
+                            team_id,
+                        )
+                        or 0
+                    ),
+                    "sprint_plans": int(
+                        await conn.fetchval(
+                            "SELECT COUNT(*) FROM cms_sprint_plans WHERE team_id = $1",
+                            team_id,
+                        )
+                        or 0
+                    ),
+                    "retros": int(
+                        await conn.fetchval(
+                            "SELECT COUNT(*) FROM cms_retros WHERE team_id = $1",
+                            team_id,
+                        )
+                        or 0
+                    ),
+                    "scope_boards": int(
+                        await conn.fetchval(
+                            "SELECT COUNT(*) FROM cms_scope_boards WHERE team_id = $1",
+                            team_id,
+                        )
+                        or 0
+                    ),
+                    "standups_deleted": int(
+                        await conn.fetchval(
+                            "SELECT COUNT(*) FROM cms_standups WHERE team_id = $1",
+                            team_id,
+                        )
+                        or 0
+                    ),
+                    "standup_rosters_deleted": int(
+                        await conn.fetchval(
+                            "SELECT COUNT(*) FROM cms_standup_rosters WHERE team_id = $1",
+                            team_id,
+                        )
+                        or 0
+                    ),
+                    "admin_links_removed": int(
+                        await conn.fetchval(
+                            "SELECT COUNT(*) FROM cms_admin_teams WHERE team_id = $1",
+                            team_id,
+                        )
+                        or 0
+                    ),
+                }
+
+                await conn.execute(
+                    """
+                    UPDATE cms_admin_accounts
+                    SET token_version = token_version + 1,
+                        updated_at = NOW()
+                    WHERE id IN (
+                        SELECT admin_id
+                        FROM cms_admin_teams
+                        WHERE team_id = $1
+                    )
+                    """,
+                    team_id,
+                )
+                await conn.execute("DELETE FROM cms_teams WHERE id = $1", team_id)
+
+                return {
+                    "id": int(row["id"]),
+                    "slug": slug,
+                    "name": str(row["name"]),
+                    "detached": detached,
+                }
 
     async def get_team_scope_questions(self, team_id: int) -> dict[str, Any]:
         async with self.pool.acquire() as conn:
