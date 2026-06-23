@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 
 from services.voting_service.cms_rbac import PERM_OVERVIEW_VIEW
 from services.voting_service.cms_team_access import require_superuser, team_scope
+from services.voting_service.cms_store.teams import TeamDeleteBlockedError
 from services.voting_service._http_shared import (
     AuthDep,
     CmsPrincipal,
@@ -90,4 +91,44 @@ async def cms_update_team(
         raise HTTPException(status_code=404, detail="Team not found")
     await _audit(request, "cms.team.update", actor.username, "ok", {"team_id": team_id})
     return team
+
+
+@router.delete("/cms/teams/{team_id}")
+async def cms_delete_team(
+    team_id: int,
+    request: Request,
+    actor: CmsPrincipal = AuthDep,
+) -> dict:
+    require_superuser(actor)
+    store = _get_cms_store(request)
+    try:
+        result = await store.delete_team(team_id)
+    except TeamDeleteBlockedError as exc:
+        await _audit(
+            request,
+            "cms.team.delete",
+            actor.username,
+            "failed",
+            {"team_id": team_id, "reason": exc.reason, "count": exc.count},
+        )
+        raise HTTPException(status_code=409, detail=exc.message) from exc
+    except Exception as exc:
+        await _audit(
+            request,
+            "cms.team.delete",
+            actor.username,
+            "failed",
+            {"team_id": team_id, "error": str(exc)},
+        )
+        raise HTTPException(status_code=400, detail="Team could not be deleted") from exc
+    if not result:
+        raise HTTPException(status_code=404, detail="Team not found")
+    await _audit(
+        request,
+        "cms.team.delete",
+        actor.username,
+        "ok",
+        {"team_id": team_id, "detached": result.get("detached")},
+    )
+    return result
 
