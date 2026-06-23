@@ -14,8 +14,14 @@ from services.voting_service.cms_store.teams import TeamDeleteBlockedError
 
 
 class FakeTeamsStore:
+  include_inactive = False
+
   async def record_audit_event(self, **kwargs: Any) -> None:
     return None
+
+  async def list_teams(self, *, is_superuser: bool, actor_team_ids: list[int], include_inactive: bool = False) -> list[dict[str, Any]]:
+    self.include_inactive = include_inactive
+    return []
 
   async def delete_team(self, team_id: int) -> Optional[dict[str, Any]]:
     if team_id == 404:
@@ -63,6 +69,33 @@ def _app(*, superuser: bool = True) -> FastAPI:
   app.dependency_overrides[_require_auth] = _actor
   app.include_router(cms_api.cms_router, prefix="/api/v1")
   return app
+
+
+def test_list_teams_requests_inactive_for_superuser() -> None:
+  store = FakeTeamsStore()
+  app = FastAPI()
+
+  async def _actor() -> CmsPrincipal:
+    return CmsPrincipal(
+      id=1,
+      username="root",
+      display_name=None,
+      is_superuser=True,
+      permissions=frozenset(),
+      roles=(),
+      pages=(),
+      team_ids=frozenset(),
+      teams=(),
+    )
+
+  app.state.cms_store = store
+  app.dependency_overrides[_require_auth] = _actor
+  app.include_router(cms_api.cms_router, prefix="/api/v1")
+
+  with TestClient(app) as client:
+    response = client.get("/api/v1/cms/teams")
+  assert response.status_code == 200
+  assert store.include_inactive is True
 
 
 def test_delete_team_requires_superuser() -> None:

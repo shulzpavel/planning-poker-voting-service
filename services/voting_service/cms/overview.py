@@ -49,7 +49,11 @@ async def cms_list_teams(
     request: Request,
     actor: CmsPrincipal = AuthDep,
 ) -> dict:
-    items = await _get_cms_store(request).list_teams(**team_scope(actor))
+    scope = team_scope(actor)
+    items = await _get_cms_store(request).list_teams(
+        **scope,
+        include_inactive=actor.is_superuser,
+    )
     return {"items": items}
 
 
