@@ -18,6 +18,7 @@ from services.voting_service.cms_rbac import (
     PERM_APP_SESSIONS_MANAGE,
     PERM_PLANNER_VIEW,
     PERM_SESSIONS_VIEW,
+    PERM_STANDUPS_MANAGE,
     PERM_TASKS_MANAGE,
     hash_password,
 )
@@ -444,6 +445,33 @@ class SchemaMixin:
                 ON cms_retros(team_id, updated_at DESC, id DESC);
             CREATE INDEX IF NOT EXISTS idx_cms_scope_boards_team_updated
                 ON cms_scope_boards(team_id, updated_at DESC, id DESC);
+
+            CREATE TABLE IF NOT EXISTS cms_standup_rosters (
+                team_id BIGINT PRIMARY KEY REFERENCES cms_teams(id) ON DELETE CASCADE,
+                members JSONB NOT NULL DEFAULT '[]'::jsonb,
+                updated_by BIGINT REFERENCES cms_admin_accounts(id) ON DELETE SET NULL,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            );
+
+            CREATE TABLE IF NOT EXISTS cms_standups (
+                id BIGSERIAL PRIMARY KEY,
+                team_id BIGINT NOT NULL REFERENCES cms_teams(id) ON DELETE CASCADE,
+                meeting_date DATE NOT NULL,
+                status TEXT NOT NULL DEFAULT 'draft'
+                    CHECK (status IN ('draft', 'published')),
+                payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+                created_by BIGINT REFERENCES cms_admin_accounts(id) ON DELETE SET NULL,
+                published_by BIGINT REFERENCES cms_admin_accounts(id) ON DELETE SET NULL,
+                published_at TIMESTAMPTZ,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                UNIQUE (team_id, meeting_date)
+            );
+            CREATE INDEX IF NOT EXISTS idx_cms_standups_team_date
+                ON cms_standups(team_id, meeting_date DESC, id DESC);
+            CREATE INDEX IF NOT EXISTS idx_cms_standups_updated
+                ON cms_standups(updated_at DESC, id DESC);
             """
         )
 
@@ -524,6 +552,7 @@ class SchemaMixin:
                         PERM_TASKS_MANAGE,
                         PERM_APP_SESSIONS_MANAGE,
                         PERM_PLANNER_VIEW,
+                        PERM_STANDUPS_MANAGE,
                     ],
                 )
 

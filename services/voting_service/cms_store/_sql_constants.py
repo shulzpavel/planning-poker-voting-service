@@ -65,6 +65,20 @@ class SqlConstantsMixin:
         LEFT JOIN cms_teams t ON t.id = r.team_id
         LEFT JOIN cms_admin_accounts a ON a.id = r.created_by
     """
+    _STANDUP_SELECT = """
+        SELECT s.id, s.team_id, s.meeting_date, s.status, s.payload,
+               s.created_by, s.published_by, s.published_at,
+               s.created_at, s.updated_at,
+               t.name AS team_name, t.slug AS team_slug,
+               cb.username AS created_by_username,
+               cb.display_name AS created_by_display_name,
+               pb.username AS published_by_username,
+               pb.display_name AS published_by_display_name
+        FROM cms_standups s
+        LEFT JOIN cms_teams t ON t.id = s.team_id
+        LEFT JOIN cms_admin_accounts cb ON cb.id = s.created_by
+        LEFT JOIN cms_admin_accounts pb ON pb.id = s.published_by
+    """
     _SESSION_SCOPE = """
         ($1::boolean OR s.team_id IS NULL OR s.team_id = ANY($2::bigint[]))
         AND ($3::bigint IS NULL OR s.team_id IS NOT DISTINCT FROM $3)
