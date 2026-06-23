@@ -56,8 +56,8 @@ jobs:
         with:
           python-version: "3.12"
       - run: python -m pip install -r requirements.txt
-      - run: PYTHONPATH=. python -m pytest -q -p no:cacheprovider
-      - run: PYTHONPATH=. python -m compileall -q services app config.py session_store.py
+      - run: PYTHONPATH=vendor/planning-poker-common:. python -m pytest -q -p no:cacheprovider
+      - run: PYTHONPATH=vendor/planning-poker-common:. python -m compileall -q services app config.py session_store.py
 
   docker:
     runs-on: ubuntu-latest

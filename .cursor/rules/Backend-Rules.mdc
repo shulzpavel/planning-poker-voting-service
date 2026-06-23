@@ -1,6 +1,6 @@
 ---
 description: planning-poker-voting-service backend rules for CMS, sessions, RBAC, scope, retro and AI
-globs: "app/**/*.py,services/**/*.py,tests/**/*.py,config.py,session_store.py,requirements.txt,pytest.ini"
+globs: "app/**/*.py,services/**/*.py,tests/**/*.py,vendor/**/*.py,config.py,session_store.py,requirements.txt,pytest.ini"
 alwaysApply: false
 ---
 
@@ -21,6 +21,7 @@ It must not call Jira REST directly; Jira access goes through `JIRA_SERVICE_URL`
 - Scope board: `../planning-poker-dev/docs/contracts/SCOPE-BOARD.md`.
 - Sessions/voting: `../planning-poker-dev/docs/contracts/SESSIONS.md`.
 - Development practices: `../planning-poker-dev/docs/development/GUIDE.md`.
+- Shared domain: `vendor/planning-poker-common/planning_poker_common/` (sync via `../planning-poker-dev/scripts/sync-vendor-common.sh`).
 
 ## Implementation Rules
 
