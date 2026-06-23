@@ -32,8 +32,10 @@ def test_stable_user_id_is_negative_and_repeatable() -> None:
 
 def test_stable_user_id_does_not_depend_on_python_hash_seed() -> None:
     script = "from services.voting_service.web_api import _stable_user_id; print(_stable_user_id('participant-1'))"
+    repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    vendor_root = os.path.join(repo_root, "vendor", "planning-poker-common")
     env = os.environ.copy()
-    env["PYTHONPATH"] = os.path.abspath("backend")
+    env["PYTHONPATH"] = os.pathsep.join([vendor_root, repo_root])
 
     values = []
     for seed in ("1", "2"):
