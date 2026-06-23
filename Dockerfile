@@ -11,6 +11,8 @@ RUN apt-get update \
 
 WORKDIR /app
 
+COPY vendor/planning-poker-common/ ./vendor/planning-poker-common/
+ENV PYTHONPATH=/app/vendor/planning-poker-common:/app
 COPY requirements.txt .
 RUN PIP_INDEX_URL=${PIP_INDEX_URL} \
     PIP_DEFAULT_TIMEOUT=${PIP_DEFAULT_TIMEOUT} \

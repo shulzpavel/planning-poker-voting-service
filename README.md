@@ -55,7 +55,7 @@ docker build -t planning-poker-voting-service .
 docker run --rm planning-poker-voting-service python -c "import planning_poker_common"
 ```
 
-Shared lib is pinned as a **GitHub tarball** in `requirements.txt` — do not use `git+https://` in Docker ([PYTHON-LIB.md](https://github.com/shulzpavel/planning-poker-dev/blob/main/docs/architecture/PYTHON-LIB.md)).
+Shared lib is **vendored** under `vendor/planning-poker-common/` and loaded via `PYTHONPATH` ([PYTHON-LIB.md](https://github.com/shulzpavel/planning-poker-dev/blob/main/docs/architecture/PYTHON-LIB.md)).
 
 ## Layout
 
@@ -82,8 +82,8 @@ app/adapters/          Postgres, Redis, jira_service_client, Anthropic
 ## Tests
 
 ```bash
-PYTHONPATH=. python -m pytest -q
-PYTHONPATH=. python -m compileall -q services app config.py session_store.py
+PYTHONPATH=vendor/planning-poker-common:. python -m pytest -q
+PYTHONPATH=vendor/planning-poker-common:. python -m compileall -q services app config.py session_store.py
 ```
 
 From `planning-poker-dev`: `make voting-test` or `make check`.
@@ -92,7 +92,6 @@ CI runs pytest, `compileall`, `docker build`, and `import planning_poker_common`
 
 ## Related repos
 
-- [planning-poker-dev](https://github.com/shulzpavel/planning-poker-dev) — compose & deploy
+- [planning-poker-dev](https://github.com/shulzpavel/planning-poker-dev) — compose, deploy, `sync-vendor-common.sh`
 - [planning-poker-jira-service](https://github.com/shulzpavel/planning-poker-jira-service) — Jira adapter
 - [planning-poker-web](https://github.com/shulzpavel/planning-poker-web) — UI
-- [planning-poker-python-lib](https://github.com/shulzpavel/planning-poker-python-lib) — shared pure modules

@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "planning-poker-common"
+version = "0.1.2"
+description = "Shared pure Python domain for Planning Poker microservices"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["planning_poker_common*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
