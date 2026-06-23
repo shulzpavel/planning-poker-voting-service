@@ -23,6 +23,7 @@ from services.voting_service.cms_store.scope_boards import ScopeBoardsMixin
 from services.voting_service.cms_store.sessions import SessionsMixin
 from services.voting_service.cms_store.sessions_list import SessionsListMixin
 from services.voting_service.cms_store.sprint_plans import SprintPlansMixin
+from services.voting_service.cms_store.standups import StandupsMixin
 from services.voting_service.cms_store.teams import TeamsMixin
 
 __all__ = [
@@ -47,6 +48,7 @@ class PostgresCmsStore(
     TeamsMixin,
     SessionsMixin,
     SprintPlansMixin,
+    StandupsMixin,
     ScopeBoardsMixin,
     RetrosMixin,
     SessionsListMixin,

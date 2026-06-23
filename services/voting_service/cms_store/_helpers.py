@@ -271,6 +271,43 @@ def _retro_row(row: asyncpg.Record) -> dict[str, Any]:
     return _attach_team_fields(data, row)
 
 
+def _standup_row(row: asyncpg.Record) -> dict[str, Any]:
+    payload = _decode_jsonb(row["payload"]) if row["payload"] is not None else {}
+    meeting_date = row["meeting_date"]
+    published_at = row["published_at"]
+    created_at = row["created_at"]
+    updated_at = row["updated_at"]
+    data = {
+        "id": int(row["id"]),
+        "meeting_date": meeting_date.isoformat() if hasattr(meeting_date, "isoformat") else str(meeting_date),
+        "status": row["status"],
+        "payload": payload if isinstance(payload, dict) else {},
+        "created_by": int(row["created_by"]) if row["created_by"] is not None else None,
+        "created_by_username": row["created_by_username"] if "created_by_username" in row.keys() else None,
+        "created_by_display_name": row["created_by_display_name"] if "created_by_display_name" in row.keys() else None,
+        "published_by": int(row["published_by"]) if row["published_by"] is not None else None,
+        "published_by_username": row["published_by_username"] if "published_by_username" in row.keys() else None,
+        "published_by_display_name": row["published_by_display_name"] if "published_by_display_name" in row.keys() else None,
+        "published_at": published_at.isoformat() if isinstance(published_at, datetime) else published_at,
+        "created_at": created_at.isoformat() if isinstance(created_at, datetime) else created_at,
+        "updated_at": updated_at.isoformat() if isinstance(updated_at, datetime) else updated_at,
+    }
+    return _attach_team_fields(data, row)
+
+
+def _standup_roster_row(row: asyncpg.Record) -> dict[str, Any]:
+    members = _decode_jsonb(row["members"]) if row["members"] is not None else []
+    updated_at = row["updated_at"]
+    created_at = row["created_at"]
+    return {
+        "team_id": int(row["team_id"]),
+        "members": members if isinstance(members, list) else [],
+        "updated_by": int(row["updated_by"]) if row["updated_by"] is not None else None,
+        "created_at": created_at.isoformat() if isinstance(created_at, datetime) else created_at,
+        "updated_at": updated_at.isoformat() if isinstance(updated_at, datetime) else updated_at,
+    }
+
+
 def _serialize_session(session: Session) -> dict[str, Any]:
     return SessionFactory.to_dict(session)
 

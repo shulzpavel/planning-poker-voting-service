@@ -28,6 +28,8 @@ PERM_PLANNER_VIEW = "cms.planner.view"
 PERM_RETRO_VIEW = "cms.retro.view"
 PERM_RETRO_MANAGE = "cms.retro.manage"
 PERM_RETRO_ANALYZE = "cms.retro.analyze"
+PERM_STANDUPS_VIEW = "cms.standups.view"
+PERM_STANDUPS_MANAGE = "cms.standups.manage"
 
 CMS_PERMISSION_DEFINITIONS: list[dict[str, str]] = [
     {
@@ -109,6 +111,16 @@ CMS_PERMISSION_DEFINITIONS: list[dict[str, str]] = [
         "key": PERM_RETRO_ANALYZE,
         "label": "Analyze retrospectives",
         "description": "Can generate paid AI analysis for completed retrospectives.",
+    },
+    {
+        "key": PERM_STANDUPS_VIEW,
+        "label": "View standups",
+        "description": "Can view published daily standup records.",
+    },
+    {
+        "key": PERM_STANDUPS_MANAGE,
+        "label": "Manage standups",
+        "description": "Can edit team rosters, create standups, and publish daily records.",
     },
 ]
 
@@ -195,6 +207,13 @@ CMS_PAGE_DEFINITIONS: list[dict[str, Any]] = [
         "permission_key": PERM_RETRO_VIEW,
         "sort_order": 40,
     },
+    {
+        "key": "standups",
+        "label": "Standups",
+        "path": "/cms/standups",
+        "permission_key": PERM_STANDUPS_VIEW,
+        "sort_order": 45,
+    },
 ]
 
 OPERATIONAL_VIEW_PERMISSIONS = [
@@ -207,6 +226,7 @@ OPERATIONAL_VIEW_PERMISSIONS = [
     PERM_EVENTS_VIEW,
     PERM_PLANNER_VIEW,
     PERM_RETRO_VIEW,
+    PERM_STANDUPS_VIEW,
 ]
 
 ALL_PERMISSION_KEYS = [item["key"] for item in CMS_PERMISSION_DEFINITIONS]
