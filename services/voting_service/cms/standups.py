@@ -20,8 +20,10 @@ from services.voting_service._http_shared import (
     CmsPrincipal,
     _audit,
     _get_cms_store,
+    _get_redis,
     require_permission,
 )
+from services.voting_service.rate_limit import enforce_rate_limit
 
 router = APIRouter()
 
@@ -231,6 +233,44 @@ def _assert_standup_visible(actor: CmsPrincipal, standup: dict) -> None:
         raise HTTPException(status_code=404, detail="Standup not found")
 
 
+def _should_queue_standup_ai(existing: dict, updated: dict) -> bool:
+    if updated.get("status") != "published":
+        return False
+    if existing.get("status") != "published":
+        return True
+    return not existing.get("ai_summary")
+
+
+async def _queue_standup_ai_analysis(
+    request: Request,
+    standup_id: int,
+    actor_username: str,
+    *,
+    force_refresh: bool = False,
+) -> None:
+    from services.voting_service.ai_job_runners import run_standup_ai_job
+    from services.voting_service.ai_jobs import get_or_create_job, spawn_ai_job
+
+    redis = await _get_redis(request)
+    resource_key = f"standup:{standup_id}:refresh" if force_refresh else f"standup:{standup_id}"
+    job_id, is_new = await get_or_create_job(
+        redis,
+        kind="standup",
+        resource_key=resource_key,
+        actor=actor_username,
+    )
+    if is_new:
+        spawn_ai_job(
+            run_standup_ai_job(
+                request.app,
+                job_id=job_id,
+                standup_id=standup_id,
+                actor_username=actor_username,
+                force_refresh=force_refresh,
+            )
+        )
+
+
 @router.get("/cms/standup-rosters/{team_id}")
 async def cms_get_standup_roster(
     team_id: int,
@@ -417,6 +457,8 @@ async def cms_update_standup(
         "ok",
         {"standup_id": standup_id, "status": standup.get("status")},
     )
+    if _should_queue_standup_ai(existing, standup):
+        await _queue_standup_ai_analysis(request, standup_id, actor.username)
     return standup
 
 
@@ -472,7 +514,114 @@ async def cms_publish_standup(
         "ok",
         {"standup_id": standup_id},
     )
+    if _should_queue_standup_ai(existing, standup):
+        await _queue_standup_ai_analysis(request, standup_id, actor.username)
     return standup
+
+
+@router.post("/cms/standups/{standup_id}/analyze")
+async def cms_standup_analyze(
+    standup_id: int,
+    request: Request,
+    async_mode: bool = Query(False, alias="async"),
+    force: bool = Query(False),
+    actor: CmsPrincipal = Depends(require_permission(PERM_STANDUPS_MANAGE)),
+) -> dict:
+    store = _get_cms_store(request)
+    standup = await store.get_standup(standup_id)
+    if not standup:
+        raise HTTPException(status_code=404, detail="Standup not found")
+    assert_record_access(actor, standup)
+    if standup.get("status") != "published":
+        raise HTTPException(status_code=409, detail="Сначала опубликуйте дейлик")
+
+    await enforce_rate_limit(
+        await _get_redis(request),
+        key=f"rl:standup_ai:actor:{actor.username}",
+        limit=int(os.getenv("STANDUP_AI_RATE_MAX", "20")),
+        window_seconds=int(os.getenv("STANDUP_AI_RATE_WINDOW_SECONDS", "3600")),
+        error_detail="Слишком много AI-запросов, попробуйте позже",
+    )
+
+    if standup.get("ai_summary") and not force:
+        await _audit(request, "cms.standup.analyze", actor.username, "ok", {"standup_id": standup_id, "cached": True})
+        return {"ai_summary": standup["ai_summary"], "cached": True}
+
+    from services.voting_service.ai_job_runners import run_standup_ai_job
+    from services.voting_service.ai_jobs import get_job, get_or_create_job, job_public_view, spawn_ai_job
+    from services.voting_service.standup_ai_llm import LlmStandupError, generate_standup_analysis, load_previous_published_standup
+
+    if async_mode:
+        redis = await _get_redis(request)
+        resource_key = f"standup:{standup_id}:refresh" if force else f"standup:{standup_id}"
+        job_id, is_new = await get_or_create_job(
+            redis,
+            kind="standup",
+            resource_key=resource_key,
+            actor=actor.username,
+        )
+        if is_new:
+            spawn_ai_job(
+                run_standup_ai_job(
+                    request.app,
+                    job_id=job_id,
+                    standup_id=standup_id,
+                    actor_username=actor.username,
+                    force_refresh=force,
+                )
+            )
+        job_record = await get_job(redis, job_id)
+        return job_public_view(job_record or {"job_id": job_id, "status": "queued", "phase": "queued", "message": "В очереди"})
+
+    http_session = getattr(request.app.state, "http_session", None)
+    if http_session is None:
+        raise HTTPException(status_code=503, detail="AI is not configured")
+    try:
+        previous_standup = await load_previous_published_standup(store, standup)
+        summary = await generate_standup_analysis(http_session, standup, previous_standup=previous_standup)
+    except LlmStandupError as exc:
+        await _audit(request, "cms.standup.analyze", actor.username, "error", {"standup_id": standup_id, "error": exc.message})
+        raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+
+    from services.voting_service.standup_publish_notify import maybe_notify_standup_published
+
+    updated = await store.save_standup_ai_summary(standup_id, summary)
+    if updated:
+        standup = updated
+    summary_with_tg = await maybe_notify_standup_published(http_session, standup=standup, ai_summary=summary)
+    if summary_with_tg.get("telegram_sent_at"):
+        await store.save_standup_ai_summary(standup_id, summary_with_tg)
+        summary = summary_with_tg
+
+    await _audit(request, "cms.standup.analyze", actor.username, "ok", {"standup_id": standup_id})
+    return {"ai_summary": summary}
+
+
+@router.get("/cms/standups/{standup_id}/analyze/jobs/{job_id}")
+async def cms_standup_analyze_job_status(
+    standup_id: int,
+    job_id: str,
+    request: Request,
+    actor: CmsPrincipal = Depends(require_permission(PERM_STANDUPS_MANAGE)),
+) -> dict:
+    standup = await _get_cms_store(request).get_standup(standup_id)
+    if not standup:
+        raise HTTPException(status_code=404, detail="Standup not found")
+    assert_record_access(actor, standup)
+
+    from services.voting_service.ai_jobs import get_job_for_poll, job_public_view
+
+    redis = await _get_redis(request)
+    job = await get_job_for_poll(redis, job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.get("kind") != "standup":
+        raise HTTPException(status_code=404, detail="Job not found")
+    expected = f"standup:{standup_id}"
+    resource_key = str(job.get("resource_key") or "")
+    if not resource_key.startswith(expected):
+        raise HTTPException(status_code=404, detail="Job not found")
+    return job_public_view(job)
 
 
 @router.delete("/cms/standups/{standup_id}")

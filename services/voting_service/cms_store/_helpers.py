@@ -273,6 +273,8 @@ def _retro_row(row: asyncpg.Record) -> dict[str, Any]:
 
 def _standup_row(row: asyncpg.Record) -> dict[str, Any]:
     payload = _decode_jsonb(row["payload"]) if row["payload"] is not None else {}
+    ai_summary_raw = row["ai_summary"] if "ai_summary" in row.keys() else None
+    ai_summary = _decode_jsonb(ai_summary_raw) if ai_summary_raw is not None else None
     meeting_date = row["meeting_date"]
     published_at = row["published_at"]
     created_at = row["created_at"]
@@ -282,6 +284,7 @@ def _standup_row(row: asyncpg.Record) -> dict[str, Any]:
         "meeting_date": meeting_date.isoformat() if hasattr(meeting_date, "isoformat") else str(meeting_date),
         "status": row["status"],
         "payload": payload if isinstance(payload, dict) else {},
+        "ai_summary": ai_summary if isinstance(ai_summary, dict) else None,
         "created_by": int(row["created_by"]) if row["created_by"] is not None else None,
         "created_by_username": row["created_by_username"] if "created_by_username" in row.keys() else None,
         "created_by_display_name": row["created_by_display_name"] if "created_by_display_name" in row.keys() else None,

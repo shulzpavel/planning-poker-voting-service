@@ -14,6 +14,26 @@ from services.voting_service._http_shared import CmsPrincipal, _require_auth
 from services.voting_service.cms_rbac import PERM_STANDUPS_MANAGE, PERM_STANDUPS_VIEW
 
 
+class FakeRedis:
+    """Minimal async Redis stand-in for AI job dedupe in standup publish tests."""
+
+    def __init__(self) -> None:
+        self.store: dict[str, str] = {}
+
+    async def get(self, key: str) -> Optional[str]:
+        return self.store.get(key)
+
+    async def setex(self, key: str, ttl: int, value: str) -> bool:
+        self.store[key] = value
+        return True
+
+
+def _noop_spawn_ai_job(coro: object) -> None:
+    close = getattr(coro, "close", None)
+    if callable(close):
+        close()
+
+
 class FakeStandupStore:
     def __init__(self) -> None:
         self._standups: dict[int, dict[str, Any]] = {}
@@ -55,6 +75,26 @@ class FakeStandupStore:
                         return {"due_date": due, "meeting_date": row["meeting_date"]}
         return None
 
+    async def find_previous_published_standup(self, **kwargs: Any) -> Optional[dict[str, Any]]:
+        team_id = kwargs["team_id"]
+        before = kwargs["before_meeting_date"]
+        exclude = kwargs.get("exclude_standup_id")
+        rows = sorted(
+            self._standups.values(),
+            key=lambda row: (row["meeting_date"], row["id"]),
+            reverse=True,
+        )
+        for row in rows:
+            if row["team_id"] != team_id or row["status"] != "published":
+                continue
+            meeting = date.fromisoformat(row["meeting_date"])
+            if meeting >= before:
+                continue
+            if exclude is not None and row["id"] == exclude:
+                continue
+            return dict(row)
+        return None
+
     async def get_standup(self, standup_id: int) -> Optional[dict[str, Any]]:
         row = self._standups.get(standup_id)
         return dict(row) if row else None
@@ -76,10 +116,20 @@ class FakeStandupStore:
             "created_by": kwargs.get("created_by"),
             "published_by": None,
             "published_at": None,
+            "ai_summary": None,
             "created_at": "2026-06-23T10:00:00+00:00",
             "updated_at": "2026-06-23T10:00:00+00:00",
             "team": {"id": kwargs["team_id"], "slug": "alpha", "name": "Alpha"},
         }
+        self._standups[standup_id] = row
+        return dict(row)
+
+    async def save_standup_ai_summary(self, standup_id: int, ai_summary: dict[str, Any]) -> Optional[dict[str, Any]]:
+        row = self._standups.get(standup_id)
+        if not row:
+            return None
+        row = dict(row)
+        row["ai_summary"] = ai_summary
         self._standups[standup_id] = row
         return dict(row)
 
@@ -151,7 +201,11 @@ def _app(*, permissions: set[str], team_ids: tuple[int, ...] = (3,), superuser: 
             teams=({"id": 3, "slug": "alpha", "name": "Alpha"},),
         )
 
+    from services.voting_service import ai_jobs
+
     app.state.cms_store = store
+    app.state.web_redis = FakeRedis()
+    ai_jobs.spawn_ai_job = _noop_spawn_ai_job
     app.dependency_overrides[_require_auth] = _actor
     app.include_router(cms_api.cms_router, prefix="/api/v1")
     return app
@@ -438,3 +492,30 @@ def test_blocker_requires_comment() -> None:
             },
         )
     assert response.status_code == 422
+
+
+def test_should_queue_standup_ai_only_on_publish_transition() -> None:
+    from services.voting_service.cms.standups import _should_queue_standup_ai
+
+    assert _should_queue_standup_ai({"status": "draft"}, {"status": "published"}) is True
+    assert _should_queue_standup_ai({"status": "published", "ai_summary": {"summary": "ok"}}, {"status": "published"}) is False
+    assert _should_queue_standup_ai({"status": "draft"}, {"status": "draft"}) is False
+
+
+def test_publish_queues_ai_analysis(monkeypatch) -> None:
+    queued: list[int] = []
+
+    async def fake_queue(request, standup_id: int, actor_username: str, *, force_refresh: bool = False) -> None:
+        queued.append(standup_id)
+
+    monkeypatch.setattr("services.voting_service.cms.standups._queue_standup_ai_analysis", fake_queue)
+
+    with TestClient(_app(permissions={PERM_STANDUPS_MANAGE, PERM_STANDUPS_VIEW})) as client:
+        created = client.post(
+            "/api/v1/cms/standups",
+            json={"team_id": 3, "meeting_date": "2026-06-30"},
+        )
+        standup_id = created.json()["id"]
+        response = client.post(f"/api/v1/cms/standups/{standup_id}/publish")
+    assert response.status_code == 200
+    assert queued == [standup_id]
