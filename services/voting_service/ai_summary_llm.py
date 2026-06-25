@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 
 ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
 ANTHROPIC_VERSION = "2023-06-01"
+DEFAULT_ANTHROPIC_MODEL = "claude-haiku-4-5-20251001"
 DEFAULT_MAX_CONTEXT_CHARS = 16000
 JSON_FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.IGNORECASE | re.MULTILINE)
 STORY_POINT_SCALE = (1, 2, 3, 5, 8, 13, 18)
@@ -37,7 +38,7 @@ def _anthropic_api_key() -> str:
 
 
 def _anthropic_model() -> str:
-    return os.getenv("ANTHROPIC_MODEL", "claude-haiku-4-5-20251001").strip()
+    return os.getenv("ANTHROPIC_MODEL", DEFAULT_ANTHROPIC_MODEL).strip() or DEFAULT_ANTHROPIC_MODEL
 
 
 def _anthropic_timeout() -> aiohttp.ClientTimeout:
@@ -126,6 +127,55 @@ def _parse_llm_json_payload(raw_text: str) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise LlmSummaryError("LLM JSON must be an object", status_code=502)
     return payload
+
+
+def parse_llm_json_object(raw_text: str) -> dict[str, Any]:
+    """Parse a JSON object from model output; tolerates fences and a missing leading ``{``."""
+    cleaned = _strip_json_fences(raw_text.strip())
+    if not cleaned.startswith("{"):
+        cleaned = f"{{{cleaned}"
+    try:
+        return _parse_llm_json_payload(cleaned)
+    except LlmSummaryError as first_error:
+        extracted = _extract_json_object(cleaned)
+        if extracted != cleaned:
+            try:
+                return _parse_llm_json_payload(extracted)
+            except LlmSummaryError:
+                pass
+        logger.warning("LLM JSON parse failed: %s preview=%s", first_error.message, cleaned[:240])
+        raise
+
+
+def anthropic_model_not_found_message(body_text: str) -> Optional[str]:
+    try:
+        error_payload = json.loads(body_text)
+    except json.JSONDecodeError:
+        return None
+    error_message = str((error_payload.get("error") or {}).get("message") or "").strip()
+    if error_message.startswith("model:"):
+        return f"Anthropic model not found: {error_message.removeprefix('model:').strip()}"
+    return None
+
+
+def read_anthropic_response_text(
+    data: dict[str, Any],
+    *,
+    truncated_message: str = "LLM response was truncated",
+) -> str:
+    stop_reason = str(data.get("stop_reason") or "")
+    if stop_reason == "max_tokens":
+        raise LlmSummaryError(truncated_message, status_code=502)
+
+    blocks = data.get("content")
+    if not isinstance(blocks, list):
+        raise LlmSummaryError("LLM response has no content", status_code=502)
+
+    text_parts = [str(block.get("text", "")) for block in blocks if block.get("type") == "text"]
+    combined = "\n".join(part for part in text_parts if part).strip()
+    if not combined:
+        raise LlmSummaryError("LLM response was empty", status_code=502)
+    return combined
 
 
 def _validate_summary_payload(payload: dict[str, Any]) -> dict[str, Any]:
@@ -336,14 +386,10 @@ async def _call_anthropic(
                 raise LlmSummaryError("LLM service is temporarily unavailable", status_code=503)
             if response.status != 200:
                 logger.warning("Anthropic API error status=%s body=%s", response.status, body_text[:300])
-                try:
-                    error_payload = json.loads(body_text)
-                    error_message = str((error_payload.get("error") or {}).get("message") or "").strip()
-                except json.JSONDecodeError:
-                    error_message = ""
-                if response.status == 404 and error_message.startswith("model:"):
-                    raise LlmSummaryError(f"Anthropic model not found: {error_message.removeprefix('model:').strip()}", status_code=502)
-                raise LlmSummaryError(error_message or "LLM request failed", status_code=502)
+                model_error = anthropic_model_not_found_message(body_text)
+                if response.status == 404 and model_error:
+                    raise LlmSummaryError(model_error, status_code=502)
+                raise LlmSummaryError("LLM request failed", status_code=502)
 
             data = json.loads(body_text) if body_text else {}
     except aiohttp.ClientError as exc:
@@ -351,19 +397,11 @@ async def _call_anthropic(
     except json.JSONDecodeError as exc:
         raise LlmSummaryError("LLM returned an unreadable response", status_code=502) from exc
 
-    blocks = data.get("content")
-    if not isinstance(blocks, list):
-        raise LlmSummaryError("LLM response has no content", status_code=502)
-
-    text_parts = [str(block.get("text", "")) for block in blocks if block.get("type") == "text"]
-    combined = "\n".join(part for part in text_parts if part).strip()
-    if not combined:
-        raise LlmSummaryError("LLM response was empty", status_code=502)
-    return combined
+    return read_anthropic_response_text(data, truncated_message="LLM response was truncated — retry shortly")
 
 
 def _parse_and_validate_summary(raw_text: str) -> dict[str, Any]:
-    payload = _parse_llm_json_payload(raw_text)
+    payload = parse_llm_json_object(raw_text)
     return _validate_summary_payload(payload)
 
 
