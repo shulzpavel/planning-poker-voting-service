@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from datetime import datetime, timezone
 from typing import Any
 
@@ -22,12 +23,14 @@ from app.utils.jira_text import truncate_text
 from services.voting_service.ai_summary_llm import (
     ANTHROPIC_API_URL,
     ANTHROPIC_VERSION,
+    LlmSummaryError,
     _anthropic_api_key,
     _anthropic_model,
     _anthropic_timeout,
     _max_context_chars,
-    _max_output_tokens,
-    _parse_llm_json_payload,
+    anthropic_model_not_found_message,
+    parse_llm_json_object,
+    read_anthropic_response_text,
 )
 
 logger = logging.getLogger(__name__)
@@ -43,6 +46,17 @@ class LlmRetroError(Exception):
         super().__init__(message)
         self.message = message
         self.status_code = status_code
+
+
+def _retro_max_output_tokens() -> int:
+    return max(
+        1400,
+        int(os.getenv("RETRO_AI_MAX_OUTPUT_TOKENS", os.getenv("ANTHROPIC_MAX_OUTPUT_TOKENS", "2200"))),
+    )
+
+
+def _raise_retro_llm_error(exc: LlmSummaryError) -> None:
+    raise LlmRetroError(exc.message, status_code=exc.status_code) from exc
 
 
 def _system_prompt() -> str:
@@ -199,8 +213,8 @@ async def _call_anthropic(http_session: aiohttp.ClientSession, context: str, *, 
     user_content = _repair_user_prompt(context, repair_error) if repair_error else _user_prompt(context)
     payload = {
         "model": _anthropic_model(),
-        "max_tokens": _max_output_tokens(),
-        "temperature": 0.3,
+        "max_tokens": _retro_max_output_tokens(),
+        "temperature": 0.2,
         "system": _system_prompt(),
         "messages": [
             {"role": "user", "content": user_content},
@@ -222,6 +236,9 @@ async def _call_anthropic(http_session: aiohttp.ClientSession, context: str, *, 
                 raise LlmRetroError("LLM service is temporarily unavailable", status_code=503)
             if response.status != 200:
                 logger.warning("Anthropic retro error status=%s body=%s", response.status, body_text[:300])
+                model_error = anthropic_model_not_found_message(body_text)
+                if response.status == 404 and model_error:
+                    raise LlmRetroError(model_error, status_code=502)
                 raise LlmRetroError("LLM request failed", status_code=502)
             data = json.loads(body_text) if body_text else {}
     except aiohttp.ClientError as exc:
@@ -229,21 +246,21 @@ async def _call_anthropic(http_session: aiohttp.ClientSession, context: str, *, 
     except json.JSONDecodeError as exc:
         raise LlmRetroError("LLM returned an unreadable response", status_code=502) from exc
 
-    blocks = data.get("content")
-    if not isinstance(blocks, list):
-        raise LlmRetroError("LLM response has no content", status_code=502)
-    text_parts = [str(block.get("text", "")) for block in blocks if block.get("type") == "text"]
-    combined = "\n".join(part for part in text_parts if part).strip()
-    if not combined:
-        raise LlmRetroError("LLM response was empty", status_code=502)
-    return combined
+    try:
+        return read_anthropic_response_text(
+            data,
+            truncated_message="LLM response was truncated — повторите анализ ретро",
+        )
+    except LlmSummaryError as exc:
+        _raise_retro_llm_error(exc)
+    return ""
 
 
 def _parse_and_validate(raw_text: str) -> dict[str, Any]:
     try:
-        payload = _parse_llm_json_payload(raw_text)
-    except Exception as exc:  # noqa: BLE001
-        raise LlmRetroError("LLM returned invalid JSON", status_code=502) from exc
+        payload = parse_llm_json_object(raw_text)
+    except LlmSummaryError as exc:
+        raise LlmRetroError(exc.message, status_code=exc.status_code) from exc
     return _validate_retro_payload(payload)
 
 
