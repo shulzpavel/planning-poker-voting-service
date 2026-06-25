@@ -9,6 +9,7 @@ from planning_poker_common.scope.team_questions import (
     empty_team_scope_questions,
     extract_team_scope_questions_from_snapshot,
     normalize_team_scope_questions,
+    union_team_scope_questions,
 )
 from services.voting_service.cms_store._helpers import _decode_jsonb, _team_row, normalize_team_slug
 
@@ -293,11 +294,6 @@ class TeamsMixin:
             if not isinstance(snapshot, dict):
                 continue
             candidate = extract_team_scope_questions_from_snapshot(snapshot)
-            candidate_manual = len(candidate.get("manual_questions") or [])
-            candidate_resolved = len(candidate.get("resolved_questions") or [])
-            merged_manual = len(merged.get("manual_questions") or [])
-            merged_resolved = len(merged.get("resolved_questions") or [])
-            if candidate_manual + candidate_resolved > merged_manual + merged_resolved:
-                merged = candidate
+            merged = union_team_scope_questions(merged, candidate)
         return normalize_team_scope_questions(merged)
 

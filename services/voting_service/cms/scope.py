@@ -68,6 +68,7 @@ from planning_poker_common.scope.team_questions import (
     resolved_question_with_release_meta,
     snapshot_open_jira_question_ids,
     team_scope_questions_empty,
+    union_team_scope_questions,
 )
 
 logger = logging.getLogger(__name__)
@@ -141,7 +142,17 @@ async def _sync_release_team_questions(store: Any, board: dict[str, Any], snapsh
     team_id = board.get("team_id")
     if not team_id:
         return
-    await store.save_team_scope_questions(int(team_id), extract_team_scope_questions_from_snapshot(snapshot))
+    existing = await store.get_team_scope_questions(int(team_id))
+    incoming = extract_team_scope_questions_from_snapshot(snapshot)
+    merged = union_team_scope_questions(existing, incoming)
+    await store.save_team_scope_questions(int(team_id), merged)
+
+
+async def _get_scope_board_for_mutation(store: Any, board_id: int) -> Optional[dict[str, Any]]:
+    board = await store.get_scope_board(board_id)
+    if not board:
+        return None
+    return await _apply_release_team_questions(store, board)
 
 
 class ScopeSectionConfigRequest(BaseModel):
@@ -1502,6 +1513,10 @@ async def cms_refresh_scope_board(
     if _is_release_scope_team(existing) and existing.get("team_id"):
         release_store = _get_cms_store(request)
         team_questions = await _ensure_team_scope_questions(release_store, int(existing["team_id"]))
+        team_questions = union_team_scope_questions(
+            team_questions,
+            extract_team_scope_questions_from_snapshot(previous_snapshot),
+        )
         open_ids = snapshot_open_jira_question_ids(snapshot)
         team_questions = register_open_jira_questions(
             team_questions,
@@ -1671,7 +1686,7 @@ async def cms_add_scope_manual_question(
     request: Request,
     actor: CmsPrincipal = Depends(require_permission(PERM_PLANNER_VIEW)),
 ) -> dict:
-    existing = await _get_cms_store(request).get_scope_board(board_id)
+    existing = await _get_scope_board_for_mutation(_get_cms_store(request), board_id)
     if not existing:
         raise HTTPException(status_code=404, detail="Scope board not found")
     assert_record_access(actor, existing)
@@ -1880,7 +1895,7 @@ async def cms_resolve_scope_question(
     request: Request,
     actor: CmsPrincipal = Depends(require_permission(PERM_PLANNER_VIEW)),
 ) -> dict:
-    existing = await _get_cms_store(request).get_scope_board(board_id)
+    existing = await _get_scope_board_for_mutation(_get_cms_store(request), board_id)
     if not existing:
         raise HTTPException(status_code=404, detail="Scope board not found")
     assert_record_access(actor, existing)
