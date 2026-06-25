@@ -5,9 +5,11 @@ import pytest
 from services.voting_service.standup_ai_llm import (
     LlmStandupError,
     _build_standup_context,
+    _parse_and_validate,
     _system_prompt,
     _validate_standup_payload,
 )
+from services.voting_service.ai_summary_llm import parse_llm_json_object
 
 
 def test_system_prompt_pins_schema_keys() -> None:
@@ -111,3 +113,17 @@ def test_validator_accepts_minimal_valid_payload() -> None:
 def test_validator_requires_summary() -> None:
     with pytest.raises(LlmStandupError):
         _validate_standup_payload({"done": ["x"]})
+
+
+def test_parse_and_validate_accepts_fenced_json() -> None:
+    out = _parse_and_validate(
+        '```json\n{"summary": "ok", "changed": [], "unchanged": [], "watch": ["x"], '
+        '"done": [], "in_progress": [], "blockers": [], "risks": [], "focus": []}\n```'
+    )
+    assert out["summary"] == "ok"
+    assert out["watch"] == ["x"]
+
+
+def test_parse_llm_json_object_prefills_standup_body() -> None:
+    payload = parse_llm_json_object('"summary": "ok", "changed": [], "unchanged": [], "watch": []}')
+    assert payload["summary"] == "ok"

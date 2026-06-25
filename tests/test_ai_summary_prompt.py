@@ -15,6 +15,7 @@ from services.voting_service.ai_summary_llm import (
     _parse_llm_json_payload,
     _system_prompt,
     _validate_summary_payload,
+    parse_llm_json_object,
 )
 
 
@@ -98,6 +99,12 @@ def test_parser_accepts_json_object_with_extra_model_text() -> None:
     )
     assert payload["description"] == "Задача с URL {в тексте}"
     assert payload["sp_final"] == 5
+
+
+def test_parse_llm_json_object_prefills_missing_open_brace() -> None:
+    payload = parse_llm_json_object('"summary": "OK", "done": []}')
+    assert payload["summary"] == "OK"
+    assert payload["done"] == []
 
 
 def test_ensure_current_task_description_backfills_in_place() -> None:

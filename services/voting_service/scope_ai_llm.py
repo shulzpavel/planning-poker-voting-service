@@ -24,10 +24,10 @@ from services.voting_service.ai_summary_llm import (
     LlmSummaryError,
     _anthropic_api_key,
     _anthropic_model,
-    _extract_json_object,
     _max_context_chars,
-    _parse_llm_json_payload,
-    _strip_json_fences,
+    anthropic_model_not_found_message,
+    parse_llm_json_object,
+    read_anthropic_response_text,
 )
 
 logger = logging.getLogger(__name__)
@@ -751,19 +751,10 @@ def _repair_user_prompt(context: str, error_message: str, workload_mode: str = "
 
 
 def _parse_scope_llm_json(raw_text: str) -> dict[str, Any]:
-    cleaned = _strip_json_fences(raw_text.strip())
-    if not cleaned.startswith("{"):
-        cleaned = f"{{{cleaned}"
     try:
-        return _parse_llm_json_payload(cleaned)
+        return parse_llm_json_object(raw_text)
     except LlmSummaryError as first_error:
-        extracted = _extract_json_object(cleaned)
-        if extracted != cleaned:
-            try:
-                return _parse_llm_json_payload(extracted)
-            except LlmSummaryError:
-                pass
-        logger.warning("scope AI JSON parse failed: %s preview=%s", first_error.message, cleaned[:240])
+        logger.warning("scope AI JSON parse failed: %s", first_error.message)
         raise LlmScopeError("LLM returned invalid JSON", status_code=502) from first_error
 
 
@@ -947,6 +938,9 @@ async def _call_anthropic(
                 raise LlmScopeError("LLM service is temporarily unavailable", status_code=503)
             if response.status != 200:
                 logger.warning("Anthropic scope error status=%s body=%s", response.status, body_text[:300])
+                model_error = anthropic_model_not_found_message(body_text)
+                if response.status == 404 and model_error:
+                    raise LlmScopeError(model_error, status_code=502)
                 raise LlmScopeError("LLM request failed", status_code=502)
             data = json.loads(body_text) if body_text else {}
     except asyncio.TimeoutError as exc:
@@ -956,18 +950,14 @@ async def _call_anthropic(
     except json.JSONDecodeError as exc:
         raise LlmScopeError("LLM returned an unreadable response", status_code=502) from exc
 
-    stop_reason = str(data.get("stop_reason") or "")
-    if stop_reason == "max_tokens":
-        raise LlmScopeError("LLM response was truncated — retry with a shorter snapshot", status_code=502)
-
-    blocks = data.get("content")
-    if not isinstance(blocks, list):
-        raise LlmScopeError("LLM response has no content", status_code=502)
-    text_parts = [str(block.get("text", "")) for block in blocks if block.get("type") == "text"]
-    combined = "\n".join(part for part in text_parts if part).strip()
-    if not combined:
-        raise LlmScopeError("LLM response was empty", status_code=502)
-    return combined
+    try:
+        return read_anthropic_response_text(
+            data,
+            truncated_message="LLM response was truncated — retry with a shorter snapshot",
+        )
+    except LlmSummaryError as exc:
+        raise LlmScopeError(exc.message, status_code=exc.status_code) from exc
+    return ""
 
 
 def _parse_and_validate(raw_text: str) -> dict[str, Any]:
