@@ -45,6 +45,51 @@ def _resolved_ids(store: dict[str, Any]) -> set[str]:
     return {str(item.get("id") or "").strip() for item in normalized["resolved_questions"] if str(item.get("id") or "").strip()}
 
 
+def _question_sort_key(item: dict[str, Any]) -> tuple[str, str]:
+    return (str(item.get("created_at") or ""), str(item.get("id") or ""))
+
+
+def union_team_scope_questions(*stores: dict[str, Any] | None) -> dict[str, Any]:
+    """Merge team question registries without dropping open questions from any source."""
+    manual_by_id: dict[str, dict[str, Any]] = {}
+    resolved_by_id: dict[str, dict[str, Any]] = {}
+    tracked: dict[str, dict[str, Any]] = {}
+
+    for store in stores:
+        normalized = normalize_team_scope_questions(store)
+        for item in normalized["resolved_questions"]:
+            question_id = str(item.get("id") or "").strip()
+            if not question_id:
+                continue
+            existing = resolved_by_id.get(question_id)
+            if existing is None or _question_sort_key(item) > _question_sort_key(existing):
+                resolved_by_id[question_id] = dict(item)
+            manual_by_id.pop(question_id, None)
+
+        for item in normalized["manual_questions"]:
+            question_id = str(item.get("id") or "").strip()
+            if not question_id or question_id in resolved_by_id:
+                continue
+            existing = manual_by_id.get(question_id)
+            if existing is None or _question_sort_key(item) < _question_sort_key(existing):
+                manual_by_id[question_id] = dict(item)
+
+        for key, value in normalized["tracked_jira"].items():
+            tracked.setdefault(key, dict(value))
+
+    return normalize_team_scope_questions(
+        {
+            "manual_questions": sorted(manual_by_id.values(), key=_question_sort_key),
+            "resolved_questions": sorted(
+                resolved_by_id.values(),
+                key=lambda item: str(item.get("resolved_at") or ""),
+                reverse=True,
+            ),
+            "tracked_jira": tracked,
+        }
+    )
+
+
 def merge_team_scope_questions_into_snapshot(
     snapshot: dict[str, Any],
     team_questions: dict[str, Any],
