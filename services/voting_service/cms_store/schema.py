@@ -446,6 +446,18 @@ class SchemaMixin:
             CREATE INDEX IF NOT EXISTS idx_cms_scope_boards_team_updated
                 ON cms_scope_boards(team_id, updated_at DESC, id DESC);
 
+            CREATE TABLE IF NOT EXISTS cms_product_radars (
+                id BIGSERIAL PRIMARY KEY,
+                name TEXT NOT NULL,
+                jql TEXT NOT NULL DEFAULT '',
+                snapshot JSONB,
+                created_by BIGINT REFERENCES cms_admin_accounts(id) ON DELETE SET NULL,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            );
+            CREATE INDEX IF NOT EXISTS idx_cms_product_radars_updated
+                ON cms_product_radars(updated_at DESC, id DESC);
+
             CREATE TABLE IF NOT EXISTS cms_standup_rosters (
                 team_id BIGINT PRIMARY KEY REFERENCES cms_teams(id) ON DELETE CASCADE,
                 members JSONB NOT NULL DEFAULT '[]'::jsonb,

@@ -13,6 +13,19 @@ from app.ports.jira_client import JiraClient
 logger = logging.getLogger(__name__)
 
 
+def _normalize_scope_status_payload(issue: dict[str, Any]) -> dict[str, str]:
+    status_raw = issue.get("status")
+    if isinstance(status_raw, dict):
+        return {
+            "name": str(status_raw.get("name") or ""),
+            "category": str(status_raw.get("category") or ""),
+        }
+    return {
+        "name": str(status_raw or ""),
+        "category": str(issue.get("status_category") or ""),
+    }
+
+
 class JiraServiceHttpClient(JiraClient):
     """HTTP client for Jira Service microservice."""
 
@@ -257,6 +270,7 @@ class JiraServiceHttpClient(JiraClient):
         force_refresh: bool = False,
         milestone_status_targets: Optional[list[str]] = None,
         enrich_changelog: bool = True,
+        changelog_max_issues: Optional[int] = None,
     ) -> Optional[dict[str, Any]]:
         """Fetch scope-dashboard issues via Jira Service."""
         url = f"{self.base_url}/api/v1/search/scope"
@@ -268,10 +282,15 @@ class JiraServiceHttpClient(JiraClient):
         }
         if milestone_status_targets:
             payload["milestone_status_targets"] = milestone_status_targets
+        if changelog_max_issues is not None:
+            payload["changelog_max_issues"] = changelog_max_issues
         try:
             data = await self._post_json(url, payload)
             issues = data.get("issues", [])
-            mapped = [
+            mapped = []
+            for issue in issues:
+                status = _normalize_scope_status_payload(issue)
+                mapped.append(
                 {
                     "key": issue["key"],
                     "summary": issue["summary"],
@@ -283,7 +302,8 @@ class JiraServiceHttpClient(JiraClient):
                     "story_points_dev": issue.get("story_points_dev"),
                     "story_points_test": issue.get("story_points_test"),
                     "story_point_estimate": issue.get("story_point_estimate"),
-                    "status": issue.get("status") or {},
+                    "status": status,
+                    "status_category": status["category"],
                     "issue_type": {"name": issue.get("issue_type") or ""},
                     "labels": issue.get("labels") or [],
                     "epic_labels": issue.get("epic_labels") or [],
@@ -337,9 +357,10 @@ class JiraServiceHttpClient(JiraClient):
                     "last_comment": issue.get("last_comment"),
                     "last_comment_author": issue.get("last_comment_author"),
                     "last_comment_at": issue.get("last_comment_at"),
+                    "subtasks": issue.get("subtasks") or [],
+                    "issue_links": issue.get("issue_links") or [],
                 }
-                for issue in issues
-            ]
+                )
             return {
                 "issues": mapped,
                 "jira_role_fields_configured": data.get("jira_role_fields_configured") or {},
