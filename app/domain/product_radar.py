@@ -9,6 +9,7 @@ from typing import Any, Literal
 from planning_poker_common.scope.domain import classify_scope_report_bucket, normalize_scope_issue
 
 from app.domain.product_radar_analytics import compute_product_analytics
+from app.domain.product_radar_blocking_feed import build_snapshot_blocking_feed
 from app.domain.scope_flow_pace import collect_product_flow_alerts
 
 ProductRadarHealth = Literal["ok", "attention", "critical"]
@@ -374,6 +375,9 @@ def compute_product_radar_snapshot(
     high_count = sum(1 for item in all_signals if item.get("severity") == "high")
 
     analytics = compute_product_analytics(issues, all_signals, now=reference)
+    all_period = (analytics.get("periods") or {}).get("all") if isinstance(analytics.get("periods"), dict) else {}
+    team_blocking = all_period.get("team_blocking") if isinstance(all_period, dict) else analytics.get("team_blocking")
+    blocking_feed = build_snapshot_blocking_feed(all_signals, team_blocking if isinstance(team_blocking, dict) else None)
 
     attention_issues = sorted(
         [
@@ -393,6 +397,7 @@ def compute_product_radar_snapshot(
         "signals": all_signals,
         "triggers": _build_triggers(all_signals),
         "analytics": analytics,
+        "blocking_feed": blocking_feed,
         "issues": [normalize_radar_issue(issue) for issue in issues[:120]],
         "attention_issues": attention_issues,
         "summary": {
