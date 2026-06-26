@@ -40,10 +40,6 @@ def _done_supplement_jql(project: str) -> str:
 def _jql_includes_done_window(jql: str) -> bool:
     lowered = jql.lower()
     return "statuscategory = done" in lowered or "statuscategory!=done" in lowered or "resolved >=" in lowered
-    jql: str
-    issues: list[dict[str, Any]] = field(default_factory=list)
-    failed: bool = False
-    truncated: bool = False
 
 
 async def _fetch_radar_batch(
