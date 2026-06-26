@@ -8,6 +8,7 @@ from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
+from app.domain.product_radar_blocking_feed import build_snapshot_blocking_feed, ensure_snapshot_blocking_feed
 from app.domain.product_radar_refresh import (
     PRODUCT_RADAR_PARTITION_SIZE,
     refresh_product_radar_partition,
@@ -98,6 +99,9 @@ async def cms_get_product_radar(
     radar = await store.get_product_radar(radar_id)
     if not radar:
         raise HTTPException(status_code=404, detail="Product radar not found")
+    snapshot = radar.get("snapshot")
+    if isinstance(snapshot, dict):
+        radar = {**radar, "snapshot": ensure_snapshot_blocking_feed(snapshot)}
     return {"radar": radar}
 
 
@@ -179,6 +183,10 @@ async def cms_refresh_product_radar(
     updated = await store.save_product_radar_snapshot(radar_id, snapshot)
     if not updated:
         raise HTTPException(status_code=404, detail="Product radar not found")
+
+    snapshot_out = updated.get("snapshot")
+    if isinstance(snapshot_out, dict):
+        updated = {**updated, "snapshot": ensure_snapshot_blocking_feed(snapshot_out)}
 
     progress = _refresh_progress(snapshot)
     await _audit(
