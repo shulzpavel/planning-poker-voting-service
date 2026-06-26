@@ -1945,3 +1945,20 @@ def apply_flow_pace_chart_order(flow_pace: dict[str, Any] | None, chart_order: l
         "chart_order": normalized,
         "charts": reorder_flow_pace_charts(charts, normalized),
     }
+
+
+def collect_product_flow_alerts(
+    issues: list[dict[str, Any]],
+    *,
+    now: datetime | None = None,
+    browse_base: str = "",
+) -> list[dict[str, Any]]:
+    """Portfolio-level flow alerts for product radar (all issues, no epic scope filter)."""
+    reference = now or datetime.now(timezone.utc)
+    alerts: list[dict[str, Any]] = []
+    for issue in issues:
+        if not isinstance(issue, dict):
+            continue
+        alerts.extend(_issue_alerts(issue, now=reference, browse_base=browse_base))
+    alerts.extend(_assignee_overload_alerts(issues, alerts))
+    return _dedupe_issue_alerts(alerts)

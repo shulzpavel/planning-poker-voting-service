@@ -17,6 +17,7 @@ from services.voting_service.cms_store._helpers import (
 from services.voting_service.cms_store._sql_constants import SqlConstantsMixin
 from services.voting_service.cms_store.lists import ListsMixin
 from services.voting_service.cms_store.rbac import RBACMixin
+from services.voting_service.cms_store.product_radars import ProductRadarsMixin
 from services.voting_service.cms_store.retros import RetrosMixin
 from services.voting_service.cms_store.schema import SchemaMixin
 from services.voting_service.cms_store.scope_boards import ScopeBoardsMixin
@@ -50,6 +51,7 @@ class PostgresCmsStore(
     SprintPlansMixin,
     StandupsMixin,
     ScopeBoardsMixin,
+    ProductRadarsMixin,
     RetrosMixin,
     SessionsListMixin,
     ListsMixin,
