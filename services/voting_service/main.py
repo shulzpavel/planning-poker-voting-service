@@ -108,6 +108,7 @@ async def lifespan(app: FastAPI):
     # prevent the rest from cleaning up (and so adapters without close() like
     # FileSessionRepository do not crash the lifespan).
     for label, closer in (
+        ("intake_service", _maybe_close(getattr(app.state, "intake_service", None))),
         ("repository", _maybe_close(getattr(app.state, "repository", None))),
         ("cms_store", _maybe_close(getattr(app.state, "cms_store", None))),
         ("retro_repository", _maybe_close(getattr(app.state, "retro_repository", None))),

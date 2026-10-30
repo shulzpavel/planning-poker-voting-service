@@ -15,7 +15,7 @@ from services.voting_service._http_shared import (
     _raise_task_error,
     require_permission,
 )
-from services.voting_service.cms import access, auth, lists, overview, planner, radar, scope, sessions, standups
+from services.voting_service.cms import access, auth, intake, lists, overview, planner, radar, scope, sessions, standups
 from services.voting_service.cms.scope import (
     DEFAULT_SCOPE_LAYOUT_ORDER,
     SCOPE_JQL_MAX_RESULTS,
@@ -33,6 +33,7 @@ from services.voting_service.cms.scope import (
 
 cms_router = APIRouter()
 cms_router.include_router(auth.router)
+cms_router.include_router(intake.router)
 cms_router.include_router(overview.router)
 cms_router.include_router(access.router)
 cms_router.include_router(lists.router)

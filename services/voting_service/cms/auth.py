@@ -10,6 +10,7 @@ import redis.asyncio as aioredis
 from fastapi import APIRouter, Cookie, Depends, Header, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
+from services.voting_service.intake_settings import dashboard_access
 from services.voting_service.cms_auth import build_cms_token_payload
 from services.voting_service.rate_limit import enforce_rate_limit
 from services.voting_service._http_shared import (
@@ -131,6 +132,7 @@ async def cms_me(actor: CmsPrincipal = AuthDep) -> dict:
         "teams": list(actor.teams),
         "team_ids": sorted(actor.team_ids),
         "theme_preference": actor.theme_preference,
+        "intake_dashboard_access": dashboard_access(actor),
     }
 
 
